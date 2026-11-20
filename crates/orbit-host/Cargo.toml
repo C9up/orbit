@@ -1,0 +1,14 @@
+[package]
+name = "orbit-host"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Orbit's native host: the tree aurora commits, laid out with taffy, diffed into platform mount operations, and UI-thread animation"
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+taffy = "0.9"
+serde_json = "1"
