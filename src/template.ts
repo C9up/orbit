@@ -9,10 +9,19 @@
  * - In a flex container every child is its own item; `flex` is a row, as on the web.
  */
 
-import { effect, isTemplateResult, untrack } from "@c9up/aurora/core";
+import {
+	effect,
+	isTemplateResult,
+	type Signal,
+	signal,
+	untrack,
+} from "@c9up/aurora/core";
 import {
 	assertBindable,
+	type EachList,
 	readComponentLifecycle,
+	readEach,
+	readEachItems,
 	setOwner,
 	type TemplateResult,
 	TemplateScanner,
@@ -275,6 +284,107 @@ function region(
 			}
 			disposers = scope;
 		});
+	});
+	return out;
+}
+
+/** Run `build` as a scope of its own: what it creates is ended by the returned disposers. */
+function scoped<T>(build: () => T): [T, Array<() => void>] {
+	const scope: Array<() => void> = [];
+	const prevOwner = setOwner(scope);
+	const prevCollecting = collecting;
+	collecting = scope;
+	try {
+		return [build(), scope];
+	} finally {
+		collecting = prevCollecting;
+		setOwner(prevOwner);
+	}
+}
+
+/**
+ * A reactive slot, read once per change, in its region only — never called
+ * beforehand to see what it gives, which ran a component twice and kept the
+ * first one's effects. Its first value decides where it sits: a primitive
+ * joins the text around it as one raw run, updated in place; anything else is
+ * built by `other`.
+ */
+function reactiveSlot(
+	slot: () => unknown,
+	other: (value: unknown) => Child[],
+): { child: Region; text: boolean } {
+	const kind = { known: false, text: false };
+	let raw: NativeNode | null = null;
+	const child = region(slot, (value) => {
+		if (!kind.known) {
+			kind.known = true;
+			kind.text = isPrimitive(value);
+		}
+		if (!kind.text) return other(value);
+		if (raw) raw.setProps({ text: str(value) });
+		else raw = rawText(str(value));
+		return [raw];
+	});
+	return { child, text: kind.text };
+}
+
+interface KeyedRow {
+	item: Signal<unknown>;
+	index: Signal<number>;
+	region: Region;
+	disposers: Array<() => void>;
+}
+
+/**
+ * aurora's `each`: one row per key, as on the DOM. A row whose key stays keeps
+ * its native views and its effects (it sees its new element and position
+ * through its accessors, and moves if the order changed); a new key builds one
+ * row; a key that left ends its row, and the host deletes its views.
+ */
+function keyedRegion(
+	list: EachList,
+	build: (value: unknown) => Child[],
+): Region {
+	const out = new Region();
+	let rows = new Map<unknown, KeyedRow>();
+	effect(() => {
+		const items = readEachItems(list.items);
+		untrack(() => {
+			const next = new Map<unknown, KeyedRow>();
+			items.forEach((element, position) => {
+				const key = list.key(element, position);
+				if (next.has(key)) {
+					throw new OrbitError(
+						"E_ORBIT_DUPLICATE_KEY",
+						`[orbit] each(): two elements share the key ${String(key)} — a key names one row`,
+					);
+				}
+				const kept = rows.get(key);
+				if (kept) {
+					kept.item(element);
+					kept.index(position);
+					next.set(key, kept);
+					return;
+				}
+				const item = signal(element);
+				const index = signal(position);
+				const region = new Region();
+				const [, disposers] = scoped(() =>
+					region.set(build(list.run(() => list.render(item, index)))),
+				);
+				next.set(key, { item, index, region, disposers });
+			});
+			for (const [key, row] of rows) {
+				if (!next.has(key)) for (const end of row.disposers.splice(0)) end();
+			}
+			rows = next;
+			out.set([...next.values()].map((row) => row.region));
+		});
+	});
+	collecting?.push(() => {
+		for (const row of rows.values())
+			for (const end of row.disposers.splice(0)) end();
+		rows = new Map();
 	});
 	return out;
 }
@@ -757,10 +867,9 @@ function textChildren(nodes: TNode[], values: readonly unknown[]): Child[] {
 }
 
 function textValue(v: unknown): Child[] {
-	if (isGetter(v)) {
-		if (isPrimitive(untrack(v))) return [rawText(() => str(v()))];
-		return [region(v, textValue)];
-	}
+	const list = readEach(v);
+	if (list) return [keyedRegion(list, textValue)];
+	if (isGetter(v)) return [reactiveSlot(v, textValue).child];
 	if (isTemplateResult(v)) {
 		ownLifecycle(v);
 		return textChildren(parse(v.strings), v.values);
@@ -802,8 +911,16 @@ function viewChildren(
 				continue;
 			}
 			const v = values[part];
-			if (isPrimitive(v) || (isGetter(v) && isPrimitive(untrack(v)))) {
+			if (isPrimitive(v)) {
 				run.push(...textValue(v));
+			} else if (isGetter(v) && !readEach(v)) {
+				const slot = reactiveSlot(v, (value) => viewValue(value, inherited));
+				if (slot.text) {
+					run.push(slot.child);
+				} else {
+					flushRun();
+					out.push(slot.child);
+				}
 			} else {
 				flushRun();
 				out.push(...viewValue(v, inherited));
@@ -815,6 +932,8 @@ function viewChildren(
 }
 
 function viewValue(v: unknown, inherited: Style): Child[] {
+	const list = readEach(v);
+	if (list) return [keyedRegion(list, (row) => viewValue(row, inherited))];
 	if (isGetter(v)) return [region(v, (value) => viewValue(value, inherited))];
 	if (isTemplateResult(v)) {
 		ownLifecycle(v);

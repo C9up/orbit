@@ -23,7 +23,9 @@ export type OrbitErrorCode =
 	/** `<img src>` over plain http: images are fetched over https only. */
 	| "E_ORBIT_INSECURE_IMAGE_URL"
 	/** `<img src>` with a scheme that is not an image source (`data:`, `javascript:`…). */
-	| "E_ORBIT_IMAGE_SOURCE";
+	| "E_ORBIT_IMAGE_SOURCE"
+	/** Two elements of an `each` list share a key: a key names one row. */
+	| "E_ORBIT_DUPLICATE_KEY";
 
 export class OrbitError extends Error {
 	readonly code: OrbitErrorCode;

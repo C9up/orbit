@@ -48,6 +48,7 @@ mount(Counter({}), { viewport: Dimensions.get("window") });
 | `.value=${() => text()}` | sets the field only when the app changes it, never over what is being typed |
 | `field-sizing-content` (+ `max-h-*`) | a `textarea` that grows with its lines, up to its maximum |
 | `img` | an image view, decoded off the UI thread at the size it is shown |
+| `each(items, key, render)` | one row per key: a kept row keeps its views and moves, a new key builds one row, a key that left deletes its row |
 
 Both read `placeholder`, `maxlength`, `autocomplete`, `inputmode` and
 `disabled`; `input` reads `type` for the keyboard and for a password field,
@@ -75,7 +76,7 @@ source's own size nor 4096 px a side, and kept decoded in a memory cache
 bounded to an eighth of the app's heap; a download or a file over 64 MB is
 refused. Remote images have no disk cache yet.
 
-Not mapped yet (`E_ORBIT_UNSUPPORTED_ELEMENT`): `select`, `svg`, `canvas`. Keyed lists, press feedback, line height and
+Not mapped yet (`E_ORBIT_UNSUPPORTED_ELEMENT`): `select`, `svg`, `canvas`. Lazy lists (only the rows in view), press feedback, line height and
 accessibility are still to come; the Tailwind subset is hand-written until it
 is compiled from nebula's theme.
 
