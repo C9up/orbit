@@ -27,6 +27,7 @@ object OrbitHost {
   private const val OP_ROOT = 7
   private const val OP_INPUT = 8
   private const val OP_IMAGE = 9
+  private const val OP_EFFECTS = 10
 
   @JvmStatic external fun nativeInit()
 
@@ -54,6 +55,7 @@ object OrbitHost {
       val ys = FloatArray(scrolls.size) { scrolls[it].scrollY / density }
       val out = nativeTick(frameTimeNanos, tags, ys)
       val buf = ByteBuffer.wrap(out, 1, out.size - 1).order(ByteOrder.LITTLE_ENDIAN)
+      if (buf.remaining() >= 9) OrbitEffects.invalidateBackdrops()
       while (buf.remaining() >= 9) {
         val view = views[buf.int]
         val prop = buf.get().toInt()
@@ -95,6 +97,7 @@ object OrbitHost {
     main.post {
       val start = SystemClock.elapsedRealtimeNanos()
       applyNow(ops)
+      OrbitEffects.invalidateBackdrops()
       val end = SystemClock.elapsedRealtimeNanos()
       Log.i("ORBIT", "APPLY bytes=${ops.size} waitMs=${(start - queued) / 1e6} applyMs=${(end - start) / 1e6}")
     }
@@ -184,6 +187,14 @@ object OrbitHost {
           val bytes = ByteArray(buf.int)
           buf.get(bytes)
           (views[tag] as? OrbitImage)?.apply(String(bytes, Charsets.UTF_8))
+        }
+        OP_EFFECTS -> {
+          val dx = buf.float; val dy = buf.float; val blur = buf.float; val spread = buf.float
+          val color = buf.int; val backdrop = buf.float; val clip = buf.get().toInt() != 0
+          views[tag]?.let { view ->
+            val shadow = if (color ushr 24 == 0) null else Shadow(dx * density, dy * density, blur * density, spread * density, color)
+            OrbitEffects.apply(view, shadow, backdrop * density, clip)
+          }
         }
         OP_ROOT -> views[tag]?.let { setChildren(root.content, listOf(it)) }
         else -> throw IllegalStateException("unknown op $code")

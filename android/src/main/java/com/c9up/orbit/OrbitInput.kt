@@ -33,6 +33,8 @@ class OrbitInput(context: Context) : EditText(context), Framed {
     layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
     background = null
     includeFontPadding = false
+    // Its text scrolls inside it: clipped to its box, whatever its parent clips.
+    clipToOwnBox()
     addTextChangedListener(object : TextWatcher {
       override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
       override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit

@@ -31,12 +31,31 @@ fun View.applyFrame(frame: FloatArray) {
 }
 
 fun View.applyLook(fill: Int, borderColor: Int, borderWidth: Float, radius: Float, opacity: Float) {
+  OrbitEffects.setRadius(this, radius)
+  OrbitEffects.setOpaque(this, fill ushr 24 == 0xff && opacity >= 1f)
+  invalidateOutline()
   background = if (fill == 0 && borderWidth == 0f) null else GradientDrawable().apply {
     setColor(fill)
     cornerRadius = radius
     if (borderWidth > 0f) setStroke(ceil(borderWidth).toInt(), borderColor)
   }
   alpha = opacity
+}
+
+/**
+ * Clip a view to its own (rounded) box, whatever its parent does. On Android
+ * a view is clipped to its bounds by its parent's `clipChildren`, which
+ * orbit's boxes turn off (CSS's overflow is visible): a scroll view and a
+ * text field, which scroll their content inside them, clip themselves.
+ */
+fun View.clipToOwnBox() {
+  outlineProvider = object : android.view.ViewOutlineProvider() {
+    override fun getOutline(view: View, outline: android.graphics.Outline) {
+      val radius = OrbitEffects.radiusOf(view)
+      outline.setRoundRect(0, 0, view.width, view.height, minOf(radius, minOf(view.width, view.height) / 2f))
+    }
+  }
+  clipToOutline = true
 }
 
 fun frameOf(view: View): FloatArray? =
@@ -50,6 +69,7 @@ class OrbitScroll(context: Context) : ScrollView(context), Framed {
   init {
     isVerticalScrollBarEnabled = false
     overScrollMode = OVER_SCROLL_NEVER
+    clipToOwnBox()
     // The offset, in dp, for what reads it in JS (a lazy list picks its rows by it).
     setOnScrollChangeListener { _, _, y, _, _ ->
       (tag as? Int)?.let { OrbitHost.nativeDispatch(it, "topScroll", 0f, y / OrbitHost.density) }
@@ -78,14 +98,47 @@ class OrbitScroll(context: Context) : ScrollView(context), Framed {
 
 open class OrbitBox(context: Context) : ViewGroup(context), Framed {
   val frame = FloatArray(4)
+  /** Backdrop blur, a Gaussian sigma in px; 0 for none. */
+  var backdropSigma = 0f
+  internal var appliedSigma = -1f
+  /** The backdrop's render node (Android 12+), kept across frames. */
+  internal var backdropNode: Any? = null
+  private var radius = 0f
+  private var clips = false
+
+  init {
+    // CSS's overflow is visible: a child, and the shadow its parent draws for
+    // it, may reach past this box. `overflow-hidden` clips (setClip).
+    clipChildren = false
+    clipToPadding = false
+  }
+
+  fun setClip(clip: Boolean) {
+    clips = clip
+    clipChildren = clip
+    clipToOutline = clip && radius > 0f
+  }
+
+  override fun drawChild(canvas: Canvas, child: View, drawingTime: Long): Boolean {
+    OrbitEffects.drawShadow(canvas, child)
+    return super.drawChild(canvas, child, drawingTime)
+  }
+
+  override fun draw(canvas: Canvas) {
+    if (backdropSigma > 0f) OrbitEffects.drawBackdrop(this, canvas)
+    super.draw(canvas)
+  }
 
   override fun setFrame(x: Float, y: Float, w: Float, h: Float) {
     frame[0] = x; frame[1] = y; frame[2] = w; frame[3] = h
     applyFrame(frame)
   }
 
-  override fun setLook(background: Int, borderColor: Int, borderWidth: Float, radius: Float, opacity: Float) =
+  override fun setLook(background: Int, borderColor: Int, borderWidth: Float, radius: Float, opacity: Float) {
+    this.radius = radius
     applyLook(background, borderColor, borderWidth, radius, opacity)
+    clipToOutline = clips && radius > 0f
+  }
 
   override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
     setMeasuredDimension(frame[2].toInt(), frame[3].toInt())

@@ -36,6 +36,7 @@ const OP_TEXT: u8 = 6;
 const OP_ROOT: u8 = 7;
 const OP_INPUT: u8 = 8;
 const OP_IMAGE: u8 = 9;
+const OP_EFFECTS: u8 = 10;
 
 const KIND_VIEW: u8 = 0;
 const KIND_TEXT: u8 = 1;
@@ -116,10 +117,24 @@ struct Node {
     text: String,
 }
 
+/// What a view draws beyond its box: a CSS box shadow, a backdrop blur, and
+/// whether it clips its children (`overflow: hidden`).
+#[derive(Clone, Default, PartialEq, Debug)]
+struct Effects {
+    shadow_x: f32,
+    shadow_y: f32,
+    shadow_blur: f32,
+    shadow_spread: f32,
+    shadow_color: i32,
+    backdrop_blur: f32,
+    clip: bool,
+}
+
 #[derive(Default)]
 struct Mounted {
     frame: [f32; 4],
     visual: Option<Visual>,
+    effects: Option<Effects>,
     text: Vec<u8>,
     children: Vec<i32>,
 }
@@ -383,6 +398,19 @@ fn visual_of(props: &Map<String, Value>) -> Visual {
         border_width: props.get("borderWidth").and_then(num).unwrap_or(0.0),
         radius: props.get("borderRadius").and_then(num).unwrap_or(0.0),
         opacity: props.get("opacity").and_then(num).unwrap_or(1.0),
+    }
+}
+
+fn effects_of(props: &Map<String, Value>) -> Effects {
+    let length = |key: &str| props.get(key).and_then(num).unwrap_or(0.0);
+    Effects {
+        shadow_x: length("shadowX"),
+        shadow_y: length("shadowY"),
+        shadow_blur: length("shadowBlur").max(0.0),
+        shadow_spread: length("shadowSpread"),
+        shadow_color: props.get("shadowColor").and_then(color).unwrap_or(0),
+        backdrop_blur: length("backdropBlur").max(0.0),
+        clip: props.get("overflow").and_then(Value::as_str) == Some("hidden"),
     }
 }
 
@@ -878,6 +906,25 @@ impl Host {
                 put_f32(&mut attrs, visual.opacity);
                 mounted.visual = Some(visual);
             }
+            // Sent once a view has any, and whenever they change after that.
+            let effects = effects_of(&node.props);
+            let first_and_none = mounted.effects.is_none() && effects == Effects::default();
+            if !first_and_none && mounted.effects.as_ref() != Some(&effects) {
+                attrs.push(OP_EFFECTS);
+                put_i32(&mut attrs, tag);
+                for v in [
+                    effects.shadow_x,
+                    effects.shadow_y,
+                    effects.shadow_blur,
+                    effects.shadow_spread,
+                ] {
+                    put_f32(&mut attrs, v);
+                }
+                put_i32(&mut attrs, effects.shadow_color);
+                put_f32(&mut attrs, effects.backdrop_blur);
+                attrs.push(u8::from(effects.clip));
+                mounted.effects = Some(effects);
+            }
             if node.kind == Kind::Image {
                 let encoded = encode_image(&node.props);
                 if encoded != mounted.text {
@@ -1195,6 +1242,7 @@ mod tests {
                 OP_CHILDREN => 4 + 4 * i32_at(i),
                 OP_FRAME => 16,
                 OP_VIEW_STYLE => 20,
+                OP_EFFECTS => 25,
                 OP_TEXT | OP_INPUT | OP_IMAGE => 4 + i32_at(i),
                 _ => panic!("unknown op {code}"),
             };
@@ -1354,6 +1402,39 @@ mod tests {
         assert_eq!(frames[1], Some([10.0, 14.0, 280.0, 30.0]));
         assert_eq!(frames[2], Some([10.0, 44.0, 280.0, 40.0]));
         assert_eq!(frames[3], None);
+    }
+
+    #[test]
+    fn effects_are_sent_when_a_view_has_any_and_when_they_change() {
+        let mut host = Host::default();
+        let (first, _) = commit(
+            &mut host,
+            r#"[["c",1,"RCTView",{}],
+                ["c",3,"RCTView",{"height":40,"shadowY":10,"shadowBlur":15,"shadowSpread":-3,"shadowColor":436207616}],
+                ["c",5,"RCTView",{"height":40,"backdropBlur":16,"overflow":"hidden"}],
+                ["k",1,[3,5]],["r",1]]"#,
+        );
+        // Two views have effects; the root has none and gets no op.
+        assert_eq!(
+            codes(&first).iter().filter(|c| **c == OP_EFFECTS).count(),
+            2
+        );
+        let at = first
+            .windows(5)
+            .position(|w| w[0] == OP_EFFECTS && w[1..5] == 3i32.to_le_bytes())
+            .expect("the shadowed view's effects");
+        let f = |i: usize| {
+            f32::from_le_bytes(first[at + 5 + 4 * i..at + 9 + 4 * i].try_into().unwrap())
+        };
+        assert_eq!((f(0), f(1), f(2), f(3)), (0.0, 10.0, 15.0, -3.0));
+        // Unchanged: nothing; the shadow removed: one op, back to none.
+        let (second, _) = commit(&mut host, r#"[["u",5,{"height":50}]]"#);
+        assert!(!codes(&second).contains(&OP_EFFECTS));
+        let (third, _) = commit(
+            &mut host,
+            r#"[["u",3,{"shadowY":null,"shadowBlur":null,"shadowSpread":null,"shadowColor":null}]]"#,
+        );
+        assert_eq!(codes(&third), vec![OP_EFFECTS]);
     }
 
     #[test]

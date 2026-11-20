@@ -40,6 +40,9 @@ mount(Counter({}), { viewport: Dimensions.get("window") });
 | `class="…"` | the Tailwind subset in `src/tailwind.ts`; text styles cascade |
 | a `flex` container | each child its own item; `flex` is a row, as on the web |
 | `overflow-y-auto` | a native scroll view around a content view |
+| `overflow-hidden` | children clipped to the box (and its rounded corners); otherwise they may overflow, as in CSS |
+| `shadow-*` | a CSS box shadow, drawn by the parent outside the box (Android 8+) |
+| `backdrop-blur-*` | what is behind the view, blurred (Android 12+; the translucent background alone below) |
 | `@click=${fn}` | a press: fires on release if the finger stayed put |
 | `motion=${{ opacity, translateX, translateY, scale }}` | UI-thread animation (`MotionValue`) |
 | `scroll-y=${value}` | the scroll offset feeds a `MotionValue` |
@@ -96,6 +99,26 @@ while the reader is there: a conversation.
 On the maintainer's phone, a conversation of 10 000 messages of varying
 length mounts in about 70 ms (30 messages: about 40 ms, the same rows built)
 and scrolls without a dropped frame.
+
+## Shadows and glass
+
+A shadow is drawn the way browsers draw one: a blurred rounded rectangle
+rendered once into a small alpha bitmap per radius and blur, then drawn as
+nine slices around the box, so a list of shadowed cards costs bitmap draws,
+not a blur per card per frame. It is painted outside the box only, so a
+translucent view does not show its own shadow.
+
+`backdrop-blur-*` blurs what the view's parent drew before it — its
+background and earlier siblings, such as the list scrolling under a glass
+header — recorded at a quarter of the size into a render node blurred by
+`RenderEffect`. Content that is not an earlier sibling (an ancestor's
+siblings) is not part of the backdrop.
+
+Measured on the maintainer's phone (Adreno 610, 90 Hz) on the glass demo
+while scrolling, against the same screen without effects: 15.5 ms per frame
+against 13.0 (RenderThread 3.6 against 1.1 ms, GPU 9.5 against 10.1 ms) when
+the RenderThread runs on a fast core; that screen does not hold 90 Hz
+without effects either.
 
 ## Pieces
 

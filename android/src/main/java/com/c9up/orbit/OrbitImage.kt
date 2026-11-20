@@ -277,6 +277,7 @@ class OrbitImage(context: Context) : View(context), Framed {
   }
 
   override fun setLook(background: Int, borderColor: Int, borderWidth: Float, radius: Float, opacity: Float) {
+    OrbitEffects.setRadius(this, radius)
     this.radius = radius
     this.borderWidth = borderWidth
     stroke.color = borderColor
