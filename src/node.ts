@@ -95,6 +95,8 @@ export class NativeNode {
 	onEvent: Handler | null = null;
 	/** An image's bytes, sent to the host's memory with the next commit. */
 	pendingBytes: Uint8Array | null = null;
+	/** A scroll view's offset readers (dp), told on each native scroll. */
+	readonly scrollListeners: Array<(y: number) => void> = [];
 
 	constructor(
 		readonly viewName: string,

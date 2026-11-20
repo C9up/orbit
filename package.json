@@ -25,11 +25,11 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "peerDependencies": {
-    "@c9up/aurora": "^0.1.52"
+    "@c9up/aurora": "^0.1.53"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",
-    "@c9up/aurora": "^0.1.52",
+    "@c9up/aurora": "^0.1.53",
     "@vitest/coverage-v8": "4.1.11",
     "typescript": "^6.0.3",
     "vitest": "4.1.11"

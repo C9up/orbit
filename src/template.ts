@@ -10,8 +10,10 @@
  */
 
 import {
+	batch,
 	effect,
 	isTemplateResult,
+	memo,
 	type Signal,
 	signal,
 	untrack,
@@ -19,9 +21,14 @@ import {
 import {
 	assertBindable,
 	type EachList,
+	firstWindow,
+	LazyLayout,
+	type LazyList,
+	type LazyView,
 	readComponentLifecycle,
 	readEach,
 	readEachItems,
+	sameWindow,
 	setOwner,
 	type TemplateResult,
 	TemplateScanner,
@@ -30,7 +37,9 @@ import {
 	afterCommit,
 	type MountOptions,
 	mountTree,
+	onEveryCommit,
 	type Root,
+	treeHost,
 } from "./commit.js";
 import { OrbitError } from "./errors.js";
 import {
@@ -344,7 +353,9 @@ interface KeyedRow {
 function keyedRegion(
 	list: EachList,
 	build: (value: unknown) => Child[],
+	placed?: (rows: Array<[unknown, Region]>) => void,
 ): Region {
+	if (list.lazy) return lazyRegion(list, list.lazy, build);
 	const out = new Region();
 	let rows = new Map<unknown, KeyedRow>();
 	effect(() => {
@@ -379,12 +390,257 @@ function keyedRegion(
 			}
 			rows = next;
 			out.set([...next.values()].map((row) => row.region));
+			placed?.([...next.entries()].map(([key, row]) => [key, row.region]));
 		});
 	});
 	collecting?.push(() => {
 		for (const row of rows.values())
 			for (const end of row.disposers.splice(0)) end();
 		rows = new Map();
+	});
+	return out;
+}
+
+/** The native nodes a region holds now, in order. */
+function nodesOf(region: Region): NativeNode[] {
+	const out: NativeNode[] = [];
+	for (const item of region.items) {
+		if (item instanceof Region) out.push(...nodesOf(item));
+		else out.push(item);
+	}
+	return out;
+}
+
+type Frame = [number, number, number, number];
+
+function isFrame(value: unknown): value is Frame {
+	return (
+		Array.isArray(value) &&
+		value.length === 4 &&
+		value.every((n) => typeof n === "number")
+	);
+}
+
+/** The host's frames for `nodes` (dp, root coordinates), null where it has none. */
+function framesOf(nodes: readonly NativeNode[]): Array<Frame | null> {
+	const answer: unknown = JSON.parse(
+		treeHost().layout(JSON.stringify(nodes.map((node) => node.tag))),
+	);
+	const list = Array.isArray(answer) ? answer : [];
+	return nodes.map((_, i) => {
+		const frame: unknown = list[i];
+		return isFrame(frame) ? frame : null;
+	});
+}
+
+/** A spacer's props: hidden when empty, so a gap-separated container gives it no gap. */
+const spacerProps = (height: number) =>
+	height > 0 ? { height, display: "flex" } : { height: 0, display: "none" };
+
+/**
+ * aurora's lazy `each` on native: only the rows intersecting the nearest
+ * scroll view's viewport, plus `overscan` dp on each side, exist — as a keyed
+ * list over that window, between two spacer views standing for the others at
+ * their measured heights (or the estimate). The window comes from aurora's
+ * own math (`LazyLayout`), as on the DOM.
+ *
+ * After each commit it reads its rows' frames from the host (top to next
+ * top, gaps included), picks the window again on each native scroll, and when
+ * a measure corrected an estimate above the viewport, scrolls the native view
+ * by the difference so what was on screen stays put. `from: "end"` starts at
+ * the bottom and follows new rows while the reader is there.
+ */
+function lazyRegion(
+	list: EachList,
+	lazy: LazyList,
+	build: (value: unknown) => Child[],
+): Region {
+	const out = new Region();
+	const before = new NativeNode("RCTView", spacerProps(0), []);
+	const after = new NativeNode("RCTView", spacerProps(0), []);
+	const layout = new LazyLayout(lazy);
+	const view = signal<LazyView | null>(null);
+	const measured = signal(0);
+	let placed: Array<[unknown, Region]> = [];
+
+	const keys = memo(() => {
+		const all = readEachItems(list.items).map((item, index) =>
+			list.key(item, index),
+		);
+		if (new Set(all).size !== all.length) {
+			const duplicate = all.find((key, i) => all.indexOf(key) !== i);
+			throw new OrbitError(
+				"E_ORBIT_DUPLICATE_KEY",
+				`[orbit] each(): two elements share the key ${String(duplicate)} — a key names one row`,
+			);
+		}
+		return all;
+	});
+	const win = memo(
+		() => {
+			const all = keys();
+			measured();
+			const current = view();
+			layout.keep(all);
+			if (current === null) {
+				const [first, last] = firstWindow(all.length, lazy);
+				return layout.spacers(all, first, last);
+			}
+			return layout.window(all, current);
+		},
+		{ equals: sameWindow },
+	);
+	const start = memo(() => win().start);
+	effect(() => {
+		const w = win();
+		before.setProps(spacerProps(w.before));
+		after.setProps(spacerProps(w.after));
+	});
+	const windowList: EachList = {
+		items: () => {
+			const w = win();
+			return readEachItems(list.items).slice(w.start, w.end);
+		},
+		key: (item, index) => list.key(item, index + untrack(start)),
+		render: (item, index) =>
+			list.render(
+				item,
+				memo(() => index() + start()),
+			),
+		run: list.run,
+	};
+	const rows = keyedRegion(windowList, build, (next) => {
+		placed = next;
+	});
+	out.set([before, rows, after]);
+
+	afterCommit(() => {
+		let scroll: NativeNode | null = before.parent;
+		while (scroll !== null && scroll.viewName !== "RCTScrollView")
+			scroll = scroll.parent;
+		const content = scroll?.flatChildren()[0];
+		if (!scroll || !content) return;
+		const scroller = scroll;
+		let offset = 0;
+		let pinned = lazy.from === "end";
+		/** The row to keep in place across the next commit, and where it was. */
+		let anchor: { key: unknown; top: number } | null = null;
+
+		/** Where each shown row starts (dp, root coordinates), and where the last ends. */
+		const rowTops = () => {
+			const heads = placed.map(([, region]) => nodesOf(region)[0] ?? null);
+			const lastRow = placed.at(-1);
+			const tail = lastRow ? (nodesOf(lastRow[1]).at(-1) ?? null) : null;
+			const asked = [scroller, content, before, after, tail, ...heads].filter(
+				(node): node is NativeNode => node !== null,
+			);
+			const frames = new Map<NativeNode, Frame>();
+			framesOf(asked).forEach((frame, i) => {
+				const node = asked[i];
+				if (frame && node) frames.set(node, frame);
+			});
+			const tops: Array<[unknown, number]> = [];
+			placed.forEach(([key], i) => {
+				const head = heads[i];
+				const frame = head ? frames.get(head) : undefined;
+				if (frame) tops.push([key, frame[1]]);
+			});
+			const afterFrame = frames.get(after);
+			const tailFrame = tail ? frames.get(tail) : undefined;
+			const bottom =
+				after.props.display !== "none" && afterFrame
+					? afterFrame[1]
+					: tailFrame
+						? tailFrame[1] + tailFrame[3]
+						: Number.NaN;
+			const beforeFrame = frames.get(before);
+			const listTop =
+				before.props.display !== "none" && beforeFrame
+					? beforeFrame[1]
+					: (tops[0]?.[1] ?? afterFrame?.[1] ?? 0);
+			return {
+				tops,
+				bottom,
+				listTop,
+				port: frames.get(scroller),
+				inner: frames.get(content),
+			};
+		};
+
+		const refresh = () => {
+			const { tops, bottom, listTop, port, inner } = rowTops();
+			if (!port || !inner) return;
+			let changed = false;
+			tops.forEach(([key, top], i) => {
+				const next = tops[i + 1]?.[1] ?? bottom;
+				if (Number.isFinite(next) && layout.measure(key, next - top))
+					changed = true;
+			});
+			// The viewport's top, in root coordinates of the unscrolled layout.
+			const top = inner[1] + offset;
+			const height = port[3];
+			const first = tops.find(
+				([, rowTop], i) =>
+					(tops[i + 1]?.[1] ?? bottom) > top && rowTop <= top + height,
+			);
+			anchor = pinned || !first ? null : { key: first[0], top: first[1] };
+			batch(() => {
+				if (changed) measured((n) => n + 1);
+				view(
+					pinned
+						? { kind: "end", height }
+						: { kind: "span", from: top - listTop, to: top - listTop + height },
+				);
+			});
+		};
+
+		// After a commit: hold what was on screen, follow the end, measure anew.
+		const stop = onEveryCommit(() => {
+			const held = anchor;
+			anchor = null;
+			if (pinned) {
+				treeHost().scroll(scroller.tag, 0, true);
+			} else if (held) {
+				const now = rowTops().tops.find(([key]) => Object.is(key, held.key));
+				if (now && Math.abs(now[1] - held.top) > 0.5)
+					treeHost().scroll(scroller.tag, now[1] - held.top, false);
+			}
+			refresh();
+		});
+		collecting?.push(stop);
+		// A scroll reports every frame, and the JS thread may be busier than
+		// that: each event only records the offset, and the window is picked
+		// once for all of them. Refreshing per event queued them faster than
+		// they were handled, and the window fell further behind the finger.
+		let scheduled = false;
+		const nextFrame: (run: () => void) => void =
+			typeof requestAnimationFrame === "function"
+				? (run) => {
+						requestAnimationFrame(run);
+					}
+				: (run) => {
+						setTimeout(run, 0);
+					};
+		const onScroll = (y: number) => {
+			offset = y;
+			if (scheduled) return;
+			scheduled = true;
+			nextFrame(() => {
+				scheduled = false;
+				if (lazy.from === "end") {
+					const { port, inner } = rowTops();
+					if (port && inner) pinned = offset + port[3] >= inner[3] - 2;
+				}
+				refresh();
+			});
+		};
+		scroller.scrollListeners.push(onScroll);
+		collecting?.push(() => {
+			const at = scroller.scrollListeners.indexOf(onScroll);
+			if (at >= 0) scroller.scrollListeners.splice(at, 1);
+		});
+		refresh();
+		if (pinned) treeHost().scroll(scroller.tag, 0, true);
 	});
 	return out;
 }

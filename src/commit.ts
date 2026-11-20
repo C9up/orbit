@@ -31,6 +31,19 @@ const created = new WeakSet<NativeNode>();
 const byTag = new Map<number, NativeNode>();
 const lastChildren = new WeakMap<NativeNode, number[]>();
 const afterCommitHooks: Array<() => void> = [];
+const commitListeners = new Set<() => void>();
+let mountedHost: OrbitHost | null = null;
+
+/** Run `listener` after every commit; returns what stops it. */
+export function onEveryCommit(listener: () => void): () => void {
+	commitListeners.add(listener);
+	return () => commitListeners.delete(listener);
+}
+
+/** The host the mounted tree commits to (layout reads, scrolling). */
+export function treeHost(): OrbitHost {
+	return mountedHost ?? currentHost();
+}
 
 /** Run `hook` once the next commit has reached the host (aurora's onMount timing). */
 export function afterCommit(hook: () => void): void {
@@ -142,6 +155,7 @@ export class Root {
 		}
 		this.reports.push(answer);
 		for (const hook of afterCommitHooks.splice(0)) hook();
+		for (const listener of [...commitListeners]) listener();
 		return answer;
 	}
 }
@@ -157,9 +171,14 @@ export interface MountOptions {
 export function mountTree(tree: NativeNode, options: MountOptions): Root {
 	const host = options.host ?? currentHost();
 	const root = new Root(host, tree);
+	mountedHost = host;
 	setDirtyListener(() => root.schedule());
 	host.setViewport(options.viewport.width, options.viewport.height);
 	host.setEventHandler((tag, type, x, y, data) => {
+		if (type === "topScroll") {
+			for (const listener of byTag.get(tag)?.scrollListeners ?? []) listener(y);
+			return;
+		}
 		if (type === "topViewport") {
 			// The window resized (the keyboard came or went): lay out again.
 			host.setViewport(x, y);

@@ -16,10 +16,19 @@ export interface OrbitHost {
 	 */
 	imageBytes(tag: number, bytes: Uint8Array): void;
 	/**
+	 * Where nodes were laid out: a JSON array of tags in, a JSON array of
+	 * `[x, y, width, height]` (dp, the root's coordinates, scroll offsets left
+	 * out) or null per tag out.
+	 */
+	layout(tags: string): string;
+	/** Scroll a scroll view by `by` dp, or to its end. */
+	scroll(tag: number, by: number, toEnd: boolean): void;
+	/**
 	 * Events from host views: touches (React Native's touch event types, in dp),
 	 * text fields (`topChange`, `topFocus`, `topBlur`, `topSubmit`, with the
-	 * text in `data`), and `topViewport` on tag 0 when the window resized (the
-	 * keyboard), with `x`/`y` the new size in dp.
+	 * text in `data`), `topScroll` from a scroll view with its offset in `y`
+	 * (dp), and `topViewport` on tag 0 when the window resized (the keyboard),
+	 * with `x`/`y` the new size in dp.
 	 */
 	setEventHandler(
 		handler: (

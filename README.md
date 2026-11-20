@@ -49,6 +49,7 @@ mount(Counter({}), { viewport: Dimensions.get("window") });
 | `field-sizing-content` (+ `max-h-*`) | a `textarea` that grows with its lines, up to its maximum |
 | `img` | an image view, decoded off the UI thread at the size it is shown |
 | `each(items, key, render)` | one row per key: a kept row keeps its views and moves, a new key builds one row, a key that left deletes its row |
+| `each(…, { lazy })` | only the rows in the nearest scroll view's viewport, plus a margin, exist (see below) |
 
 Both read `placeholder`, `maxlength`, `autocomplete`, `inputmode` and
 `disabled`; `input` reads `type` for the keyboard and for a password field,
@@ -76,9 +77,25 @@ source's own size nor 4096 px a side, and kept decoded in a memory cache
 bounded to an eighth of the app's heap; a download or a file over 64 MB is
 refused. Remote images have no disk cache yet.
 
-Not mapped yet (`E_ORBIT_UNSUPPORTED_ELEMENT`): `select`, `svg`, `canvas`. Lazy lists (only the rows in view), press feedback, line height and
-accessibility are still to come; the Tailwind subset is hand-written until it
+Not mapped yet (`E_ORBIT_UNSUPPORTED_ELEMENT`): `select`, `svg`, `canvas`. Press feedback, line height and accessibility are still to come; the Tailwind subset is hand-written until it
 is compiled from nebula's theme.
+
+## Long lists
+
+`each(items, key, render, { lazy: { estimate, overscan, from } })` builds only
+the rows intersecting its scroll view's viewport, plus `overscan` dp on each
+side, between two spacer views that stand for the others at their measured
+heights (`estimate` for a row not shown yet). It picks its rows with aurora's
+own window math, so a list behaves as on the web. On each scroll it records
+the offset and picks the window once per frame; after each commit it reads
+its rows' frames from the host, and when a measure corrects an estimate
+above the viewport it scrolls the native view by the difference, so what is
+on screen stays put. `from: 'end'` starts at the bottom and follows new rows
+while the reader is there: a conversation.
+
+On the maintainer's phone, a conversation of 10 000 messages of varying
+length mounts in about 70 ms (30 messages: about 40 ms, the same rows built)
+and scrolls without a dropped frame.
 
 ## Pieces
 
@@ -100,5 +117,5 @@ sources to the app module. iOS is not there yet.
 
 ## Requirements
 
-`@c9up/aurora` 0.1.52 or later (its host-free `./core` and `./renderer`
+`@c9up/aurora` 0.1.53 or later (its host-free `./core` and `./renderer`
 entries), React Native 0.87 with the new architecture, Hermes.

@@ -33,6 +33,9 @@ export class FakeHost implements OrbitHost {
 	readonly images: Array<[number, Uint8Array]> = [];
 	/** How many batches had been committed when each bytes call came. */
 	readonly imagesAt: number[] = [];
+	/** Each scroll view's offset (dp), as `scroll` moved it. */
+	readonly offsets = new Map<number, number>();
+	readonly scrolls: Array<[number, number, boolean]> = [];
 	root: number | null = null;
 	viewport: [number, number] = [0, 0];
 	handler:
@@ -87,6 +90,67 @@ export class FakeHost implements OrbitHost {
 	imageBytes(tag: number, bytes: Uint8Array): void {
 		this.images.push([tag, bytes]);
 		this.imagesAt.push(this.batches.length);
+	}
+
+	/**
+	 * A column layout, enough for a list: a node is as tall as its `height`
+	 * prop, or its children stacked; hidden (`display: none`) takes nothing; a
+	 * scroll view is as tall as the viewport unless it says otherwise.
+	 */
+	#height(tag: number): number {
+		const node = this.nodes.get(tag);
+		if (!node || node.props.display === "none") return 0;
+		const own = node.props.height;
+		if (typeof own === "number") return own;
+		if (node.viewName === "RCTScrollView") return this.viewport[1];
+		return node.children.reduce((sum, child) => sum + this.#height(child), 0);
+	}
+
+	#top(tag: number): number | null {
+		if (tag === this.root) return 0;
+		for (const [parentTag, parent] of this.nodes) {
+			const at = parent.children.indexOf(tag);
+			if (at < 0) continue;
+			const parentTop = this.#top(parentTag);
+			if (parentTop === null) return null;
+			return parent.children
+				.slice(0, at)
+				.reduce((y, sibling) => y + this.#height(sibling), parentTop);
+		}
+		return null;
+	}
+
+	layout(tags: string): string {
+		const asked: unknown = JSON.parse(tags);
+		const list = Array.isArray(asked) ? asked : [];
+		return JSON.stringify(
+			list.map((tag) => {
+				if (typeof tag !== "number" || !this.nodes.has(tag)) return null;
+				const y = this.#top(tag);
+				return y === null ? null : [0, y, this.viewport[0], this.#height(tag)];
+			}),
+		);
+	}
+
+	/** Moves the offset and reports it back, as the native view does on its next frame. */
+	scroll(tag: number, by: number, toEnd: boolean): void {
+		this.scrolls.push([tag, by, toEnd]);
+		const content = this.nodes.get(tag)?.children[0];
+		const max = Math.max(
+			0,
+			(content === undefined ? 0 : this.#height(content)) - this.#height(tag),
+		);
+		const next = toEnd
+			? max
+			: Math.min(max, Math.max(0, (this.offsets.get(tag) ?? 0) + by));
+		this.offsets.set(tag, next);
+		queueMicrotask(() => this.handler?.(tag, "topScroll", 0, next, ""));
+	}
+
+	/** The reader scrolls the view to `y`. */
+	scrollTo(tag: number, y: number): void {
+		this.offsets.set(tag, y);
+		this.handler?.(tag, "topScroll", 0, y, "");
 	}
 
 	setEventHandler(

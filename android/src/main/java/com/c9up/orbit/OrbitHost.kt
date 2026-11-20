@@ -100,6 +100,20 @@ object OrbitHost {
     }
   }
 
+  /** Called by the C++ module on the JS thread: scroll a scroll view by `by` dp, or to its end. */
+  @JvmStatic
+  fun scroll(tag: Int, by: Float, toEnd: Boolean) {
+    main.post {
+      val view = views[tag] as? OrbitScroll ?: return@post
+      if (toEnd) {
+        val content = view.getChildAt(0)
+        view.scrollTo(0, maxOf(0, (content?.bottom ?: 0) - view.height))
+      } else {
+        view.scrollBy(0, (by * density).toInt())
+      }
+    }
+  }
+
   /** Called by the C++ module on the JS thread: an image node's bytes, kept in memory. */
   @JvmStatic
   fun imageBytes(tag: Int, bytes: ByteArray) = OrbitImages.put(tag, bytes)

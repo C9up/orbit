@@ -22,6 +22,7 @@ jclass gHostClass = nullptr;
 jmethodID gApply = nullptr;
 jmethodID gMeasure = nullptr;
 jmethodID gImageBytes = nullptr;
+jmethodID gScroll = nullptr;
 
 std::mutex gHandlerMutex;
 std::shared_ptr<OrbitEventHandler> gHandler;
@@ -118,6 +119,30 @@ void NativeOrbit::imageBytes(jsi::Runtime& rt, double tag, jsi::Object bytes) {
   env->DeleteLocalRef(array);
 }
 
+// Where nodes were laid out, for a lazy list: a JSON array of tags in, of
+// [x, y, w, h] (dp, root coordinates) or null out.
+std::string NativeOrbit::layout(jsi::Runtime& rt, std::string tags) {
+  OrbitBuf out{};
+  int32_t code = orbit_layout(reinterpret_cast<const uint8_t*>(tags.data()), tags.size(), &out);
+  std::string json = takeString(out);
+  if (code != 0) {
+    throw jsi::JSError(rt, json);
+  }
+  return json;
+}
+
+// Scroll a scroll view by `by` dp, or to its end: applied on the UI thread
+// after the mount operations already posted, so a lazy list's correction
+// lands with the layout it corrects.
+void NativeOrbit::scroll(jsi::Runtime&, double tag, double by, bool toEnd) {
+  if (gHostClass == nullptr) {
+    return;
+  }
+  JNIEnv* env = facebook::jni::Environment::current();
+  env->CallStaticVoidMethod(
+      gHostClass, gScroll, static_cast<jint>(tag), static_cast<jfloat>(by), static_cast<jboolean>(toEnd));
+}
+
 void NativeOrbit::setEventHandler(jsi::Runtime&, OrbitEventHandler handler) {
   std::lock_guard<std::mutex> lock(gHandlerMutex);
   gHandler = std::make_shared<OrbitEventHandler>(std::move(handler));
@@ -193,6 +218,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_c9up_orbit_OrbitHost_nativeInit(JNIEn
     gApply = env->GetStaticMethodID(cls, "apply", "([B)V");
     gMeasure = env->GetStaticMethodID(cls, "measureText", "([BF)J");
     gImageBytes = env->GetStaticMethodID(cls, "imageBytes", "(I[B)V");
+    gScroll = env->GetStaticMethodID(cls, "scroll", "(IFZ)V");
   }
 }
 

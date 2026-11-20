@@ -50,6 +50,10 @@ class OrbitScroll(context: Context) : ScrollView(context), Framed {
   init {
     isVerticalScrollBarEnabled = false
     overScrollMode = OVER_SCROLL_NEVER
+    // The offset, in dp, for what reads it in JS (a lazy list picks its rows by it).
+    setOnScrollChangeListener { _, _, y, _, _ ->
+      (tag as? Int)?.let { OrbitHost.nativeDispatch(it, "topScroll", 0f, y / OrbitHost.density) }
+    }
   }
 
   override fun setFrame(x: Float, y: Float, w: Float, h: Float) {

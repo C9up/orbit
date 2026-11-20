@@ -356,6 +356,9 @@ fn style_of(props: &Map<String, Value>) -> Style {
             .unwrap_or(LengthPercentageAuto::auto()),
     };
     s.aspect_ratio = props.get("aspectRatio").and_then(num);
+    if props.get("display").and_then(Value::as_str) == Some("none") {
+        s.display = Display::None;
+    }
     s
 }
 
@@ -571,6 +574,29 @@ impl Host {
             }
             tag = *self.parent.get(&tag)?;
         }
+    }
+
+    /// Where nodes were laid out: `[x, y, width, height]` in the root's
+    /// coordinates (a scroll view's offset left out), or null for a tag with
+    /// no layout. A lazy list reads its rows' heights and its viewport here.
+    pub fn frames(&self, tags: &[i32]) -> Vec<Option<[f32; 4]>> {
+        tags.iter()
+            .map(|&tag| {
+                let id = self.nodes.get(&tag)?.taffy?;
+                let own = self.tree.layout(id).ok()?;
+                let (mut x, mut y) = (own.location.x, own.location.y);
+                let mut at = tag;
+                while let Some(&parent) = self.parent.get(&at) {
+                    if let Some(id) = self.nodes.get(&parent).and_then(|n| n.taffy) {
+                        let layout = self.tree.layout(id).ok()?;
+                        x += layout.location.x;
+                        y += layout.location.y;
+                    }
+                    at = parent;
+                }
+                Some([x, y, own.size.width, own.size.height])
+            })
+            .collect()
     }
 
     pub fn commit(&mut self, ops_json: &[u8], out: &mut Vec<u8>) -> Result<CommitInfo, String> {
@@ -1002,6 +1028,26 @@ fn info_json(info: &CommitInfo, ops_bytes: usize) -> String {
     .to_string()
 }
 
+/// The frames of a JSON array of tags, as a JSON array of `[x, y, w, h]` or
+/// null (see `Host::frames`). Returns 0, or 1 with `{"error": …}`.
+///
+/// # Safety
+/// `tags` must point to `len` readable bytes; `out` must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn orbit_layout(tags: *const u8, len: usize, out: *mut OrbitBuf) -> i32 {
+    let input = std::slice::from_raw_parts(tags, len);
+    let (code, json) = match serde_json::from_slice::<Vec<i32>>(input) {
+        Ok(tags) => (
+            0,
+            serde_json::to_string(&HOST.with(|h| h.borrow().frames(&tags)))
+                .unwrap_or_else(|_| "[]".to_owned()),
+        ),
+        Err(e) => (1, serde_json::json!({ "error": e.to_string() }).to_string()),
+    };
+    *out = OrbitBuf::from_vec(json.into_bytes());
+    code
+}
+
 /// Commit a JSON batch. `mount_ops` receives the binary mount operations,
 /// `info` a JSON object (or `{"error": …}`). Returns 0 on success.
 ///
@@ -1287,6 +1333,27 @@ mod tests {
         assert_eq!(codes(&second), vec![OP_IMAGE]);
         let (third, _) = commit(&mut host, r#"[["u",5,{"width":40,"height":40}]]"#);
         assert_eq!(codes(&third), vec![OP_FRAME]);
+    }
+
+    #[test]
+    fn frames_are_in_the_roots_coordinates_and_hidden_nodes_take_no_room() {
+        let mut host = Host::default();
+        host.set_viewport(300.0, 600.0);
+        commit(
+            &mut host,
+            r#"[["c",1,"RCTView",{"padding":10}],
+                ["c",3,"RCTView",{"height":0,"display":"none"}],
+                ["c",5,"RCTView",{"paddingTop":4}],
+                ["c",7,"RCTView",{"height":30}],
+                ["c",9,"RCTView",{"height":40}],
+                ["k",5,[7,9]],["k",1,[3,5]],["r",1]]"#,
+        );
+        let frames = host.frames(&[3, 7, 9, 42]);
+        assert_eq!(frames[0].map(|f| f[3]), Some(0.0));
+        // 10 of the root's padding, 4 of the container's: the hidden spacer takes none.
+        assert_eq!(frames[1], Some([10.0, 14.0, 280.0, 30.0]));
+        assert_eq!(frames[2], Some([10.0, 44.0, 280.0, 40.0]));
+        assert_eq!(frames[3], None);
     }
 
     #[test]
