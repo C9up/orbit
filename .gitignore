@@ -1,5 +1,6 @@
 node_modules/
-target/
+# A directory, or a link to a build directory outside the repository
+target
 dist/
 coverage/
 *.node
