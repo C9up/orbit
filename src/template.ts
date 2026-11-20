@@ -61,7 +61,7 @@ const INLINE = new Set([
 	"code",
 	"a",
 ]);
-const UNSUPPORTED = new Set(["select", "img", "svg", "canvas", "iframe"]);
+const UNSUPPORTED = new Set(["select", "svg", "canvas", "iframe"]);
 
 // Tailwind's preflight resets headings; only these keep a user-agent look.
 const TAG_TEXT: { [tag: string]: Style } = {
@@ -574,6 +574,97 @@ function inputElement(
 	return withMotion(node, attrs);
 }
 
+// ─── Images ──────────────────────────────────────────────────────
+
+// Bytes handed to an image are numbered so that new bytes reload the view
+// even under the same node.
+let bytesVersion = 0;
+
+const SCHEME = /^([a-z][a-z0-9+.-]*):/i;
+
+/**
+ * Where `src` points, in the form the host loads: `https://…`, `file:<path>`,
+ * `content://…` (what Android's pickers return), `asset:<name>` for a file
+ * bundled with the app, or `bytes:<n>` for bytes the app hands over (they are
+ * sent to the host's memory at the next commit, never written to disk).
+ */
+function imageSource(node: NativeNode, value: unknown): string {
+	if (value instanceof Uint8Array || value instanceof ArrayBuffer) {
+		node.pendingBytes =
+			value instanceof Uint8Array ? value : new Uint8Array(value);
+		bytesVersion += 1;
+		return `bytes:${bytesVersion}`;
+	}
+	node.pendingBytes = null;
+	const src = str(value).trim();
+	if (src === "") return "";
+	const scheme = SCHEME.exec(src)?.[1]?.toLowerCase();
+	if (scheme === undefined) {
+		return src.startsWith("/")
+			? `file:${src}`
+			: `asset:${src.replace(/^\.\//, "")}`;
+	}
+	if (scheme === "https" || scheme === "content") return src;
+	if (scheme === "file") {
+		// file:///data/x.jpg and file:/data/x.jpg name the same path.
+		const path = src.slice(5).replace(/^\/\/(?=\/)/, "");
+		try {
+			return `file:${decodeURIComponent(path)}`;
+		} catch {
+			throw new OrbitError(
+				"E_ORBIT_IMAGE_SOURCE",
+				`[orbit] <img src="${src}">: not a valid file URL`,
+			);
+		}
+	}
+	if (scheme === "http")
+		throw new OrbitError(
+			"E_ORBIT_INSECURE_IMAGE_URL",
+			`[orbit] <img src="${src}">: an image is fetched over https only`,
+		);
+	throw new OrbitError(
+		"E_ORBIT_IMAGE_SOURCE",
+		`[orbit] <img src="${src}">: ${scheme}: is not an image source (https:, file:, content:, a bundled asset or bytes)`,
+	);
+}
+
+/**
+ * `<img>`: an image the host decodes off the UI thread, at the size its box
+ * is laid out to, and keeps in a bounded memory cache. Sized by its classes
+ * (`w-*`, `h-*`, `size-*`, `aspect-*`): the box does not wait for the image
+ * to learn its size. `object-*` fits it, `rounded-*` clips it, `alt` is what
+ * the screen reader says.
+ */
+function imgElement(
+	el: TElement,
+	values: readonly unknown[],
+	attrs: Attrs,
+): NativeNode {
+	const raw = new Map<string, unknown>();
+	for (const attr of el.attrs) raw.set(attr.name, attrValue(attr, values));
+	const node = new NativeNode("OrbitImage", {}, []);
+	const style = bindClass(node, attrs, {}, (s) => s.box);
+	const src = raw.get("src");
+	const initial = isGetter(src) ? untrack(src) : src;
+	node.props = {
+		...flatten(style),
+		src: imageSource(node, initial),
+		alt: str(raw.get("alt")),
+	};
+	if (isGetter(src)) {
+		let first = true;
+		effect(() => {
+			const next = src();
+			if (first) {
+				first = false;
+				return;
+			}
+			node.setProps({ src: imageSource(node, next) });
+		});
+	}
+	return withMotion(withEvents(node, attrs), attrs);
+}
+
 function element(
 	el: TElement,
 	values: readonly unknown[],
@@ -589,6 +680,7 @@ function element(
 	if (el.tag === "input" || el.tag === "textarea") {
 		return inputElement(el, values, inherited, attrs);
 	}
+	if (el.tag === "img") return imgElement(el, values, attrs);
 	const own = TAG_TEXT[el.tag] ?? {};
 	if (TEXT_BLOCK.has(el.tag) || INLINE.has(el.tag)) {
 		const node = new NativeNode(

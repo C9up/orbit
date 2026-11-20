@@ -29,6 +29,10 @@ export class FakeHost implements OrbitHost {
 	readonly batches: Op[][] = [];
 	readonly nodes = new Map<number, CreatedNode>();
 	readonly motion: Array<[string, ...unknown[]]> = [];
+	/** Bytes handed to image nodes, by tag, in the order they came. */
+	readonly images: Array<[number, Uint8Array]> = [];
+	/** How many batches had been committed when each bytes call came. */
+	readonly imagesAt: number[] = [];
 	root: number | null = null;
 	viewport: [number, number] = [0, 0];
 	handler:
@@ -78,6 +82,11 @@ export class FakeHost implements OrbitHost {
 			nodes: this.nodes.size,
 			opsBytes: 0,
 		});
+	}
+
+	imageBytes(tag: number, bytes: Uint8Array): void {
+		this.images.push([tag, bytes]);
+		this.imagesAt.push(this.batches.length);
 	}
 
 	setEventHandler(

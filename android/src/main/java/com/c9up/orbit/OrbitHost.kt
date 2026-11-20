@@ -26,6 +26,7 @@ object OrbitHost {
   private const val OP_TEXT = 6
   private const val OP_ROOT = 7
   private const val OP_INPUT = 8
+  private const val OP_IMAGE = 9
 
   @JvmStatic external fun nativeInit()
 
@@ -99,6 +100,10 @@ object OrbitHost {
     }
   }
 
+  /** Called by the C++ module on the JS thread: an image node's bytes, kept in memory. */
+  @JvmStatic
+  fun imageBytes(tag: Int, bytes: ByteArray) = OrbitImages.put(tag, bytes)
+
   /** Text size in dp, packed as two float bit patterns (width high, height low). */
   @JvmStatic
   fun measureText(spans: ByteArray, maxWidth: Float): Long {
@@ -125,12 +130,16 @@ object OrbitHost {
             1 -> OrbitTextView(context)
             2 -> OrbitScroll(context)
             3 -> OrbitInput(context)
+            4 -> OrbitImage(context)
             else -> OrbitBox(context)
           }
           view.tag = tag
           views[tag] = view
         }
-        OP_DELETE -> views.remove(tag)?.let { (it.parent as? ViewGroup)?.removeView(it) }
+        OP_DELETE -> {
+          views.remove(tag)?.let { (it.parent as? ViewGroup)?.removeView(it) }
+          OrbitImages.release(tag)
+        }
         OP_CHILDREN -> {
           val parent = views[tag] as? ViewGroup
           val count = buf.int
@@ -156,6 +165,11 @@ object OrbitHost {
           val bytes = ByteArray(buf.int)
           buf.get(bytes)
           (views[tag] as? OrbitInput)?.apply(String(bytes, Charsets.UTF_8), density)
+        }
+        OP_IMAGE -> {
+          val bytes = ByteArray(buf.int)
+          buf.get(bytes)
+          (views[tag] as? OrbitImage)?.apply(String(bytes, Charsets.UTF_8))
         }
         OP_ROOT -> views[tag]?.let { setChildren(root.content, listOf(it)) }
         else -> throw IllegalStateException("unknown op $code")

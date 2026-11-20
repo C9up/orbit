@@ -41,7 +41,7 @@ fun View.applyLook(fill: Int, borderColor: Int, borderWidth: Float, radius: Floa
 
 fun frameOf(view: View): FloatArray? =
   (view as? OrbitBox)?.frame ?: (view as? OrbitTextView)?.frame ?: (view as? OrbitScroll)?.frame
-    ?: (view as? OrbitInput)?.frame
+    ?: (view as? OrbitInput)?.frame ?: (view as? OrbitImage)?.frame
 
 /** Native scrolling: the content child's frame (from orbit-host) sets the range. */
 class OrbitScroll(context: Context) : ScrollView(context), Framed {

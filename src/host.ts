@@ -11,6 +11,11 @@ export interface OrbitHost {
 	/** Apply a JSON batch of tree operations; returns the host's JSON report. */
 	commit(ops: string): string;
 	/**
+	 * The bytes an image node shows (`<img src=${bytes}>`): copied into the
+	 * host's memory, never to disk, and dropped (zeroed) with the node.
+	 */
+	imageBytes(tag: number, bytes: Uint8Array): void;
+	/**
 	 * Events from host views: touches (React Native's touch event types, in dp),
 	 * text fields (`topChange`, `topFocus`, `topBlur`, `topSubmit`, with the
 	 * text in `data`), and `topViewport` on tag 0 when the window resized (the

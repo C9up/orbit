@@ -10,7 +10,7 @@ export type OrbitErrorCode =
 	| "E_ORBIT_NO_HOST"
 	/** The native host refused a commit; the message carries its report. */
 	| "E_ORBIT_COMMIT_FAILED"
-	/** An element with no native mapping yet (`<input>`, `<img>`, `<svg>`…). */
+	/** An element with no native mapping yet (`<select>`, `<svg>`, `<canvas>`…). */
 	| "E_ORBIT_UNSUPPORTED_ELEMENT"
 	/** A block element inside text: native text holds only inline runs. */
 	| "E_ORBIT_BLOCK_IN_TEXT"
@@ -19,7 +19,11 @@ export type OrbitErrorCode =
 	/** `scroll-y=${…}` was not a motion value. */
 	| "E_ORBIT_INVALID_SCROLL_BINDING"
 	/** A colour orbit cannot read (named colours other than `transparent`, `hsl()`…). */
-	| "E_ORBIT_INVALID_COLOR";
+	| "E_ORBIT_INVALID_COLOR"
+	/** `<img src>` over plain http: images are fetched over https only. */
+	| "E_ORBIT_INSECURE_IMAGE_URL"
+	/** `<img src>` with a scheme that is not an image source (`data:`, `javascript:`…). */
+	| "E_ORBIT_IMAGE_SOURCE";
 
 export class OrbitError extends Error {
 	readonly code: OrbitErrorCode;

@@ -47,14 +47,35 @@ mount(Counter({}), { viewport: Dimensions.get("window") });
 | `@input`, `@change`, `@focus`, `@blur`, Enter as `@keydown` | the field's events, `event.target.value` carrying the text |
 | `.value=${() => text()}` | sets the field only when the app changes it, never over what is being typed |
 | `field-sizing-content` (+ `max-h-*`) | a `textarea` that grows with its lines, up to its maximum |
+| `img` | an image view, decoded off the UI thread at the size it is shown |
 
 Both read `placeholder`, `maxlength`, `autocomplete`, `inputmode` and
 `disabled`; `input` reads `type` for the keyboard and for a password field,
 `textarea` reads `rows`. The root lays out inside the safe area: the status bar, the navigation
 buttons, a display cutout and the open keyboard are kept clear of content.
 
-Not mapped yet (`E_ORBIT_UNSUPPORTED_ELEMENT`): `select`, `img`, `svg`,
-`canvas`. Keyed lists, press feedback, line height and
+An `img` reads `src` and `alt`, and is sized by its classes (`w-*`, `h-*`,
+`size-*`, `aspect-square`, `aspect-video`): its box never waits for the image
+to learn a size, so an unsized image takes no height. `object-cover`,
+`object-contain`, `object-none` and `object-scale-down` fit it (`fill` by
+default, as in CSS), `rounded-*` clips it and a border is drawn over it.
+`src` is
+
+- an `https://` URL (plain `http:` throws `E_ORBIT_INSECURE_IMAGE_URL`);
+- a path (`/data/…` or `file://…`), or a `content://` URI from a picker;
+- a bare name, read from the app's bundled assets;
+- bytes, a `Uint8Array` or an `ArrayBuffer` (`src=${bytes}`): sent to the
+  native side's memory at the next commit, never written to disk, and zeroed
+  with the node, so a decrypted media stays out of storage. orbit reads the
+  array when it commits: keep it unchanged until the image shows.
+
+Any other scheme (`data:`, `javascript:`…) throws `E_ORBIT_IMAGE_SOURCE`.
+Images are decoded at the size their box is laid out to, never above the
+source's own size nor 4096 px a side, and kept decoded in a memory cache
+bounded to an eighth of the app's heap; a download or a file over 64 MB is
+refused. Remote images have no disk cache yet.
+
+Not mapped yet (`E_ORBIT_UNSUPPORTED_ELEMENT`): `select`, `svg`, `canvas`. Keyed lists, press feedback, line height and
 accessibility are still to come; the Tailwind subset is hand-written until it
 is compiled from nebula's theme.
 

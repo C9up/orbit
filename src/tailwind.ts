@@ -89,10 +89,14 @@ const FONT_SIZES: { [k: string]: number } = {
 	"3xl": 30,
 };
 const RADII: { [k: string]: number } = {
+	none: 0,
+	sm: 2,
 	"": 4,
 	md: 6,
 	lg: 8,
 	xl: 12,
+	"2xl": 16,
+	"3xl": 24,
 	full: 9999,
 };
 const WEIGHTS: { [k: string]: string } = {
@@ -143,6 +147,15 @@ const FIXED: { [cls: string]: Style } = {
 	// that grows with its lines up to a max-h-*.
 	"field-sizing-content": { fieldSizing: "content" },
 	"w-full": { width: "100%" },
+	"h-full": { height: "100%" },
+	"aspect-square": { aspectRatio: 1 },
+	"aspect-video": { aspectRatio: 16 / 9 },
+	// How an image fills its box (CSS object-fit; `fill` is CSS's default).
+	"object-cover": { objectFit: "cover" },
+	"object-contain": { objectFit: "contain" },
+	"object-fill": { objectFit: "fill" },
+	"object-none": { objectFit: "none" },
+	"object-scale-down": { objectFit: "scale-down" },
 	border: { borderWidth: 1 },
 	"border-2": { borderWidth: 2 },
 	"border-white": { borderColor: "#ffffff" },
@@ -251,7 +264,12 @@ function utility(cls: string): Style | null {
 			out[key] = Number(spacing[2]) * 4;
 		return out;
 	}
-	const rounded = /^rounded(?:-(md|lg|xl|full))?$/.exec(cls);
+	const square = /^size-(\d+(?:\.5)?)$/.exec(cls);
+	if (square) {
+		const side = Number(square[1]) * 4;
+		return { width: side, height: side };
+	}
+	const rounded = /^rounded(?:-(none|sm|md|lg|xl|2xl|3xl|full))?$/.exec(cls);
 	if (rounded) return { borderRadius: RADII[rounded[1] ?? ""] ?? 4 };
 	const font = /^font-(normal|medium|semibold|bold)$/.exec(cls);
 	if (font) return { fontWeight: WEIGHTS[font[1] ?? ""] ?? "400" };

@@ -16,6 +16,7 @@ class NativeOrbit : public NativeOrbitCxxSpec<NativeOrbit> {
 
   void setViewport(jsi::Runtime& rt, double width, double height);
   std::string commit(jsi::Runtime& rt, std::string ops);
+  void imageBytes(jsi::Runtime& rt, double tag, jsi::Object bytes);
   void setEventHandler(jsi::Runtime& rt, OrbitEventHandler handler);
 
   void motionValue(jsi::Runtime& rt, double tag, double initial);

@@ -93,6 +93,8 @@ export class NativeNode {
 	/** Something below this node changed since the last commit. */
 	childrenDirty = false;
 	onEvent: Handler | null = null;
+	/** An image's bytes, sent to the host's memory with the next commit. */
+	pendingBytes: Uint8Array | null = null;
 
 	constructor(
 		readonly viewName: string,

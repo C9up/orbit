@@ -7,6 +7,8 @@ export interface Spec extends TurboModule {
   readonly setViewport: (width: number, height: number) => void;
   /** Commit a JSON batch of tree ops; returns the host's JSON report. */
   readonly commit: (ops: string) => string;
+  /** An image node's bytes (a Uint8Array or ArrayBuffer), held in memory until the node goes. */
+  readonly imageBytes: (tag: number, bytes: Object) => void;
   /** Touches on host views, as React Native's touch event types, in dp. */
   /** Touches (dp), text-field events with their text in `data`, `topViewport` on tag 0 (window resized). */
   readonly setEventHandler: (handler: (tag: number, type: string, x: number, y: number, data: string) => void) => void;

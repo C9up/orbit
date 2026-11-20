@@ -46,14 +46,26 @@ function sameTags(
 	return true;
 }
 
-function visit(node: NativeNode, ops: unknown[]): void {
+type Bytes = Array<[number, Uint8Array]>;
+
+// Only nodes the commit reaches hand their bytes over: the host drops them
+// with the node, so bytes of a node it never saw would stay behind.
+function takeBytes(node: NativeNode, bytes: Bytes): void {
+	if (node.pendingBytes) {
+		bytes.push([node.tag, node.pendingBytes]);
+		node.pendingBytes = null;
+	}
+}
+
+function visit(node: NativeNode, ops: unknown[], bytes: Bytes): void {
+	takeBytes(node, bytes);
 	if (!created.has(node)) {
 		ops.push(["c", node.tag, node.viewName, node.props]);
 		created.add(node);
 		byTag.set(node.tag, node);
 		node.pendingProps = null;
 		const kids = node.flatChildren();
-		for (const kid of kids) visit(kid, ops);
+		for (const kid of kids) visit(kid, ops, bytes);
 		const tags = kids.map((kid) => kid.tag);
 		if (tags.length > 0) ops.push(["k", node.tag, tags]);
 		lastChildren.set(node, tags);
@@ -66,7 +78,7 @@ function visit(node: NativeNode, ops: unknown[]): void {
 	}
 	if (node.childrenDirty) {
 		const kids = node.flatChildren();
-		for (const kid of kids) visit(kid, ops);
+		for (const kid of kids) visit(kid, ops, bytes);
 		const tags = kids.map((kid) => kid.tag);
 		if (!sameTags(lastChildren.get(node), tags)) {
 			ops.push(["k", node.tag, tags]);
@@ -106,11 +118,14 @@ export class Root {
 	commit(): OrbitReport {
 		this.#scheduled = false;
 		const ops: unknown[] = [];
-		visit(this.#tree, ops);
+		const bytes: Bytes = [];
+		visit(this.#tree, ops, bytes);
 		if (!this.#rootSent) {
 			ops.push(["r", this.#tree.tag]);
 			this.#rootSent = true;
 		}
+		// Before the ops that show them: the host reads them when it mounts.
+		for (const [tag, data] of bytes) this.#host.imageBytes(tag, data);
 		const answer: unknown = JSON.parse(this.#host.commit(JSON.stringify(ops)));
 		if (!isReport(answer)) {
 			throw new OrbitError(

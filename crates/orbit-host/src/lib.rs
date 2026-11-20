@@ -35,11 +35,13 @@ const OP_VIEW_STYLE: u8 = 5;
 const OP_TEXT: u8 = 6;
 const OP_ROOT: u8 = 7;
 const OP_INPUT: u8 = 8;
+const OP_IMAGE: u8 = 9;
 
 const KIND_VIEW: u8 = 0;
 const KIND_TEXT: u8 = 1;
 const KIND_SCROLL: u8 = 2;
 const KIND_INPUT: u8 = 3;
+const KIND_IMAGE: u8 = 4;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
@@ -50,6 +52,8 @@ enum Kind {
     VirtualText,
     /// A native text field: a layout leaf the platform measures by its font.
     TextInput,
+    /// An image: a layout leaf sized by its style alone, decoded by the platform.
+    Image,
 }
 
 impl Kind {
@@ -60,13 +64,14 @@ impl Kind {
             "RCTVirtualText" => Kind::VirtualText,
             "RCTScrollView" => Kind::Scroll,
             "OrbitTextInput" => Kind::TextInput,
+            "OrbitImage" => Kind::Image,
             _ => Kind::View,
         }
     }
     fn is_layout(self) -> bool {
         matches!(
             self,
-            Kind::View | Kind::Scroll | Kind::Text | Kind::TextInput
+            Kind::View | Kind::Scroll | Kind::Text | Kind::TextInput | Kind::Image
         )
     }
 }
@@ -482,6 +487,22 @@ fn encode_input(props: &Map<String, Value>, layout: &taffy::Layout) -> Vec<u8> {
     Value::Object(field).to_string().into_bytes()
 }
 
+/// An image's mount payload: where it comes from, how it fits its box, and
+/// what a screen reader says. Its frame and corners travel as for any view.
+fn encode_image(props: &Map<String, Value>) -> Vec<u8> {
+    let text = |key: &str| props.get(key).and_then(Value::as_str).unwrap_or("");
+    serde_json::json!({
+        "src": text("src"),
+        "fit": match text("objectFit") {
+            fit @ ("cover" | "contain" | "none" | "scale-down") => fit,
+            _ => "fill",
+        },
+        "alt": text("alt"),
+    })
+    .to_string()
+    .into_bytes()
+}
+
 impl Host {
     fn set_measure(&mut self, measure: MeasureFn) {
         self.measure = Some(measure);
@@ -536,7 +557,7 @@ impl Host {
                     let style = text_style_of(&node.props).over(inherited);
                     self.collect_runs(&node.children, &style, runs);
                 }
-                Kind::View | Kind::Scroll | Kind::TextInput => {}
+                Kind::View | Kind::Scroll | Kind::TextInput | Kind::Image => {}
             }
         }
     }
@@ -797,6 +818,7 @@ impl Host {
                     Kind::Text => KIND_TEXT,
                     Kind::Scroll => KIND_SCROLL,
                     Kind::TextInput => KIND_INPUT,
+                    Kind::Image => KIND_IMAGE,
                     _ => KIND_VIEW,
                 });
                 Mounted {
@@ -830,7 +852,16 @@ impl Host {
                 put_f32(&mut attrs, visual.opacity);
                 mounted.visual = Some(visual);
             }
-            if node.kind == Kind::TextInput {
+            if node.kind == Kind::Image {
+                let encoded = encode_image(&node.props);
+                if encoded != mounted.text {
+                    attrs.push(OP_IMAGE);
+                    put_i32(&mut attrs, tag);
+                    put_i32(&mut attrs, encoded.len() as i32);
+                    attrs.extend_from_slice(&encoded);
+                    mounted.text = encoded;
+                }
+            } else if node.kind == Kind::TextInput {
                 let encoded = encode_input(&node.props, layout);
                 if encoded != mounted.text {
                     attrs.push(OP_INPUT);
@@ -1118,7 +1149,7 @@ mod tests {
                 OP_CHILDREN => 4 + 4 * i32_at(i),
                 OP_FRAME => 16,
                 OP_VIEW_STYLE => 20,
-                OP_TEXT | OP_INPUT => 4 + i32_at(i),
+                OP_TEXT | OP_INPUT | OP_IMAGE => 4 + i32_at(i),
                 _ => panic!("unknown op {code}"),
             };
         }
@@ -1216,6 +1247,46 @@ mod tests {
         assert!(host.spans[&3].ends_with(b"un\ndeux"));
         commit(&mut host, r#"[["u",3,{"maxHeight":8}]]"#);
         assert_eq!(height(&host), 8.0);
+    }
+
+    #[test]
+    fn an_image_is_a_leaf_sized_by_its_style_and_sent_with_its_source() {
+        let mut host = Host::default();
+        host.set_viewport(300.0, 600.0);
+        let (first, info) = commit(
+            &mut host,
+            r#"[["c",1,"RCTView",{}],
+                ["c",3,"OrbitImage",{"width":"100%","aspectRatio":1.5,"borderRadius":8,"src":"https://cdn.example.com/a.jpg","alt":"Plage","objectFit":"cover"}],
+                ["c",5,"OrbitImage",{"src":"asset:logo.png"}],
+                ["k",1,[3,5]],["r",1]]"#,
+        );
+        assert_eq!(info.measures, 0, "an image is never measured");
+        let size = |tag: i32| {
+            host.tree
+                .layout(host.nodes[&tag].taffy.unwrap())
+                .unwrap()
+                .size
+        };
+        assert_eq!((size(3).width, size(3).height), (300.0, 200.0));
+        // Unsized, it gets no height (stretched across the column, as any
+        // item): its box does not wait for the decode to learn a size.
+        assert_eq!((size(5).width, size(5).height), (300.0, 0.0));
+        assert_eq!(codes(&first).iter().filter(|c| **c == OP_IMAGE).count(), 2);
+        let json = String::from_utf8_lossy(&first);
+        assert!(
+            json.contains(r#"{"alt":"Plage","fit":"cover","src":"https://cdn.example.com/a.jpg"}"#),
+            "{json}"
+        );
+        assert!(
+            json.contains(r#""fit":"fill""#),
+            "CSS's default fit: {json}"
+        );
+
+        // A new source: one IMAGE op; a resize alone: only the frame.
+        let (second, _) = commit(&mut host, r#"[["u",5,{"src":"bytes:2"}]]"#);
+        assert_eq!(codes(&second), vec![OP_IMAGE]);
+        let (third, _) = commit(&mut host, r#"[["u",5,{"width":40,"height":40}]]"#);
+        assert_eq!(codes(&third), vec![OP_FRAME]);
     }
 
     #[test]

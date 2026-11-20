@@ -4,6 +4,8 @@
 #include <jni.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <optional>
 #include <string>
 #include <mutex>
 #include <vector>
@@ -19,6 +21,7 @@ namespace {
 jclass gHostClass = nullptr;
 jmethodID gApply = nullptr;
 jmethodID gMeasure = nullptr;
+jmethodID gImageBytes = nullptr;
 
 std::mutex gHandlerMutex;
 std::shared_ptr<OrbitEventHandler> gHandler;
@@ -73,6 +76,46 @@ std::string NativeOrbit::commit(jsi::Runtime& rt, std::string ops) {
     throw jsi::JSError(rt, report);
   }
   return report;
+}
+
+// The bytes of an `<img src=${bytes}>`: a Uint8Array (any typed-array view) or
+// an ArrayBuffer, copied straight into the Kotlin side's memory.
+void NativeOrbit::imageBytes(jsi::Runtime& rt, double tag, jsi::Object bytes) {
+  const char* refused = "[orbit] imageBytes expects a Uint8Array or an ArrayBuffer";
+  std::optional<jsi::ArrayBuffer> buffer;
+  size_t offset = 0;
+  size_t length = 0;
+  if (bytes.isArrayBuffer(rt)) {
+    buffer.emplace(bytes.getArrayBuffer(rt));
+    length = buffer->size(rt);
+  } else {
+    jsi::Value inner = bytes.getProperty(rt, "buffer");
+    jsi::Value byteOffset = bytes.getProperty(rt, "byteOffset");
+    jsi::Value byteLength = bytes.getProperty(rt, "byteLength");
+    if (!inner.isObject() || !byteOffset.isNumber() || !byteLength.isNumber()) {
+      throw jsi::JSError(rt, refused);
+    }
+    jsi::Object object = inner.getObject(rt);
+    if (!object.isArrayBuffer(rt) || byteOffset.getNumber() < 0 || byteLength.getNumber() < 0) {
+      throw jsi::JSError(rt, refused);
+    }
+    buffer.emplace(object.getArrayBuffer(rt));
+    offset = static_cast<size_t>(byteOffset.getNumber());
+    length = static_cast<size_t>(byteLength.getNumber());
+  }
+  size_t size = buffer->size(rt);
+  if (offset > size || length > size - offset || length > static_cast<size_t>(INT32_MAX)) {
+    throw jsi::JSError(rt, "[orbit] imageBytes: the view runs past its buffer");
+  }
+  if (gHostClass == nullptr) {
+    return;
+  }
+  JNIEnv* env = facebook::jni::Environment::current();
+  jbyteArray array = env->NewByteArray(static_cast<jsize>(length));
+  env->SetByteArrayRegion(
+      array, 0, static_cast<jsize>(length), reinterpret_cast<const jbyte*>(buffer->data(rt) + offset));
+  env->CallStaticVoidMethod(gHostClass, gImageBytes, static_cast<jint>(tag), array);
+  env->DeleteLocalRef(array);
 }
 
 void NativeOrbit::setEventHandler(jsi::Runtime&, OrbitEventHandler handler) {
@@ -149,6 +192,7 @@ extern "C" JNIEXPORT void JNICALL Java_com_c9up_orbit_OrbitHost_nativeInit(JNIEn
     gHostClass = static_cast<jclass>(env->NewGlobalRef(cls));
     gApply = env->GetStaticMethodID(cls, "apply", "([B)V");
     gMeasure = env->GetStaticMethodID(cls, "measureText", "([BF)J");
+    gImageBytes = env->GetStaticMethodID(cls, "imageBytes", "(I[B)V");
   }
 }
 
