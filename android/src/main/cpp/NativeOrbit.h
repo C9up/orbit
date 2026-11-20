@@ -8,7 +8,7 @@
 
 namespace facebook::react {
 
-using OrbitEventHandler = AsyncCallback<double, std::string, double, double>;
+using OrbitEventHandler = AsyncCallback<double, std::string, double, double, std::string>;
 
 class NativeOrbit : public NativeOrbitCxxSpec<NativeOrbit> {
  public:

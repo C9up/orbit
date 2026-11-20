@@ -29,7 +29,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",
-    "@c9up/aurora": "workspace:*",
+    "@c9up/aurora": "^0.1.52",
     "@vitest/coverage-v8": "4.1.11",
     "typescript": "^6.0.3",
     "vitest": "4.1.11"

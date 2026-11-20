@@ -25,10 +25,18 @@ object OrbitHost {
   private const val OP_VIEW_STYLE = 5
   private const val OP_TEXT = 6
   private const val OP_ROOT = 7
+  private const val OP_INPUT = 8
 
   @JvmStatic external fun nativeInit()
 
   @JvmStatic external fun nativeDispatch(tag: Int, type: String, x: Float, y: Float)
+
+  @JvmStatic external fun nativeDispatchText(tag: Int, type: String, text: String)
+
+  @JvmStatic external fun nativeViewport(width: Float, height: Float)
+
+  /** The safe area changed (bars, cutout, keyboard): JS lays out again, now or once it listens. */
+  fun reportViewport(width: Float, height: Float) = nativeViewport(width, height)
 
   @JvmStatic external fun nativeTick(nowNs: Long, scrollTags: IntArray, scrollY: FloatArray): ByteArray
 
@@ -116,6 +124,7 @@ object OrbitHost {
           val view: View = when (buf.get().toInt()) {
             1 -> OrbitTextView(context)
             2 -> OrbitScroll(context)
+            3 -> OrbitInput(context)
             else -> OrbitBox(context)
           }
           view.tag = tag
@@ -143,7 +152,12 @@ object OrbitHost {
           buf.get(bytes)
           (views[tag] as? OrbitTextView)?.setText(OrbitText.decode(bytes, density))
         }
-        OP_ROOT -> views[tag]?.let { setChildren(root, listOf(it)) }
+        OP_INPUT -> {
+          val bytes = ByteArray(buf.int)
+          buf.get(bytes)
+          (views[tag] as? OrbitInput)?.apply(String(bytes, Charsets.UTF_8), density)
+        }
+        OP_ROOT -> views[tag]?.let { setChildren(root.content, listOf(it)) }
         else -> throw IllegalStateException("unknown op $code")
       }
     }

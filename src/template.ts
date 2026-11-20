@@ -61,15 +61,7 @@ const INLINE = new Set([
 	"code",
 	"a",
 ]);
-const UNSUPPORTED = new Set([
-	"input",
-	"textarea",
-	"select",
-	"img",
-	"svg",
-	"canvas",
-	"iframe",
-]);
+const UNSUPPORTED = new Set(["select", "img", "svg", "canvas", "iframe"]);
 
 // Tailwind's preflight resets headings; only these keep a user-agent look.
 const TAG_TEXT: { [tag: string]: Style } = {
@@ -459,6 +451,129 @@ function scrollElement(
 	return withMotion(node, attrs);
 }
 
+// ─── Text fields ─────────────────────────────────────────────────
+
+/** An attribute's value: its single slot's value, or its parts joined. */
+function attrValue(attr: TAttr, values: readonly unknown[]): unknown {
+	const [only] = attr.parts;
+	if (attr.parts.length === 1 && typeof only === "number") return values[only];
+	return attr.parts
+		.map((p) => (typeof p === "string" ? p : str(values[p])))
+		.join("");
+}
+
+const KEYBOARDS: { [type: string]: string } = {
+	email: "email",
+	number: "numeric",
+	tel: "phone",
+	url: "url",
+	search: "search",
+	numeric: "numeric",
+	decimal: "decimal",
+};
+
+// What CSS gives a placeholder by default (slate-400 in nebula's theme).
+const PLACEHOLDER = "#94a3b8";
+
+/** The event a field handler receives: the shape DOM handlers read. */
+function fieldEvent(type: string, value: string, key?: string) {
+	const target = { value };
+	return { type, key, target, currentTarget: target };
+}
+
+function call(handler: unknown, event: unknown): void {
+	if (typeof handler === "function") handler(event);
+}
+
+/**
+ * `<input>` / `<textarea>`: a native text field. The field owns its text while
+ * the user types — nothing round-trips through JS before a character shows —
+ * and reports each change; a bound value is sent back only when it differs
+ * from what the field last reported, so the caret never jumps.
+ */
+function inputElement(
+	el: TElement,
+	values: readonly unknown[],
+	inherited: Style,
+	attrs: Attrs,
+): NativeNode {
+	const raw = new Map<string, unknown>();
+	for (const attr of el.attrs) raw.set(attr.name, attrValue(attr, values));
+	const type = str(raw.get("type") ?? "text").toLowerCase();
+	const multiline = el.tag === "textarea";
+	const rowsAttr = Number(str(raw.get("rows")));
+	const maxLength = Number(str(raw.get("maxlength")));
+	const inputmode = str(raw.get("inputmode")).toLowerCase();
+	const node = new NativeNode("OrbitTextInput", {}, []);
+	const style = bindClass(node, attrs, { ...inherited }, (s) => ({
+		...s.text,
+		...s.box,
+	}));
+	const bound = raw.get(".value") ?? raw.get("value");
+	let lastNative = isGetter(bound) ? str(untrack(bound)) : str(bound);
+	let version = 0;
+	node.props = {
+		...flatten({ placeholderColor: PLACEHOLDER, ...style }),
+		placeholder: str(raw.get("placeholder")),
+		multiline,
+		rows:
+			Number.isFinite(rowsAttr) && rowsAttr > 0 ? rowsAttr : multiline ? 2 : 1,
+		secure: type === "password",
+		keyboard: KEYBOARDS[inputmode] ?? KEYBOARDS[type] ?? "text",
+		maxLength: Number.isFinite(maxLength) && maxLength > 0 ? maxLength : 0,
+		editable: !raw.has("disabled") || raw.get("disabled") === false,
+		autocomplete: str(raw.get("autocomplete")),
+		text: lastNative,
+		textVersion: version,
+	};
+	if (isGetter(bound)) {
+		let first = true;
+		effect(() => {
+			const next = str(bound());
+			if (first) {
+				first = false;
+				return;
+			}
+			if (next === lastNative) return;
+			lastNative = next;
+			version += 1;
+			// A field sized by its content is measured on what it now holds:
+			// cleared after a send, it shrinks back.
+			node.setProps(
+				node.props.fieldSizing === "content"
+					? { text: next, textVersion: version, measureText: next }
+					: { text: next, textVersion: version },
+			);
+		});
+	}
+	let atFocus = lastNative;
+	node.onEvent = (eventType, payload) => {
+		const text: unknown =
+			typeof payload === "object" && payload !== null
+				? Reflect.get(payload, "text")
+				: undefined;
+		const value = typeof text === "string" ? text : lastNative;
+		if (eventType === "topChange") {
+			lastNative = value;
+			// A field sized by its content grows with its lines: the host
+			// measures this text (layout only — the field already shows it).
+			if (node.props.fieldSizing === "content")
+				node.setProps({ measureText: value });
+			call(raw.get("@input"), fieldEvent("input", value));
+		} else if (eventType === "topFocus") {
+			atFocus = value;
+			call(raw.get("@focus"), fieldEvent("focus", value));
+		} else if (eventType === "topBlur") {
+			if (value !== atFocus)
+				call(raw.get("@change"), fieldEvent("change", value));
+			call(raw.get("@blur"), fieldEvent("blur", value));
+		} else if (eventType === "topSubmit") {
+			call(raw.get("@keydown"), fieldEvent("keydown", value, "Enter"));
+		}
+	};
+	return withMotion(node, attrs);
+}
+
 function element(
 	el: TElement,
 	values: readonly unknown[],
@@ -471,6 +586,9 @@ function element(
 		);
 	}
 	const attrs = readAttrs(el, values);
+	if (el.tag === "input" || el.tag === "textarea") {
+		return inputElement(el, values, inherited, attrs);
+	}
 	const own = TAG_TEXT[el.tag] ?? {};
 	if (TEXT_BLOCK.has(el.tag) || INLINE.has(el.tag)) {
 		const node = new NativeNode(

@@ -118,6 +118,10 @@ const SPACING: { [prefix: string]: string[] } = {
 	gap: ["gap"],
 	w: ["width"],
 	h: ["height"],
+	"min-h": ["minHeight"],
+	"max-h": ["maxHeight"],
+	"min-w": ["minWidth"],
+	"max-w": ["maxWidth"],
 };
 
 const FIXED: { [cls: string]: Style } = {
@@ -133,6 +137,11 @@ const FIXED: { [cls: string]: Style } = {
 	"justify-between": { justifyContent: "space-between" },
 	"justify-end": { justifyContent: "flex-end" },
 	"self-start": { alignSelf: "flex-start" },
+	"self-end": { alignSelf: "flex-end" },
+	"self-center": { alignSelf: "center" },
+	// A text field sized by its content (CSS field-sizing), e.g. a composer
+	// that grows with its lines up to a max-h-*.
+	"field-sizing-content": { fieldSizing: "content" },
 	"w-full": { width: "100%" },
 	border: { borderWidth: 1 },
 	"border-2": { borderWidth: 2 },
@@ -233,7 +242,9 @@ function utility(cls: string): Style | null {
 		return { [key]: withAlpha(hex, Number(translucent[3])) };
 	}
 	const spacing =
-		/^(p|px|py|pt|pb|pl|pr|m|mx|my|mt|mb|gap|w|h)-(\d+(?:\.5)?)$/.exec(cls);
+		/^(p|px|py|pt|pb|pl|pr|m|mx|my|mt|mb|gap|w|h|min-h|max-h|min-w|max-w)-(\d+(?:\.5)?)$/.exec(
+			cls,
+		);
 	if (spacing) {
 		const out: Style = {};
 		for (const key of SPACING[spacing[1] ?? ""] ?? [])

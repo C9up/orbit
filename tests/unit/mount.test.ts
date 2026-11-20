@@ -162,7 +162,7 @@ describe("press", () => {
 		);
 		const [textTag] = first(host.all("RCTText"));
 		const fire = (type: string, x: number, y: number) =>
-			host.handler?.(textTag, type, x, y);
+			host.handler?.(textTag, type, x, y, "");
 		return { clicks, fire };
 	}
 
@@ -236,7 +236,7 @@ describe("errors and colours", () => {
 	it("names an element with no native mapping", () => {
 		setup();
 		expectCode(
-			() => mount(html`<div><input /></div>`, { viewport }),
+			() => mount(html`<div><select></select></div>`, { viewport }),
 			"E_ORBIT_UNSUPPORTED_ELEMENT",
 		);
 	});

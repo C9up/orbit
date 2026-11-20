@@ -22,6 +22,9 @@ jmethodID gMeasure = nullptr;
 
 std::mutex gHandlerMutex;
 std::shared_ptr<OrbitEventHandler> gHandler;
+// The last safe-area size the platform reported (dp), replayed to a handler set later.
+float gViewportWidth = 0;
+float gViewportHeight = 0;
 
 std::string takeString(OrbitBuf buf) {
   std::string s(reinterpret_cast<const char*>(buf.ptr), buf.len);
@@ -75,6 +78,10 @@ std::string NativeOrbit::commit(jsi::Runtime& rt, std::string ops) {
 void NativeOrbit::setEventHandler(jsi::Runtime&, OrbitEventHandler handler) {
   std::lock_guard<std::mutex> lock(gHandlerMutex);
   gHandler = std::make_shared<OrbitEventHandler>(std::move(handler));
+  // The platform may have reported the safe area before JS listened.
+  if (gViewportWidth > 0 && gViewportHeight > 0) {
+    gHandler->call(0.0, std::string("topViewport"), gViewportWidth, gViewportHeight, std::string());
+  }
 }
 
 void NativeOrbit::motionValue(jsi::Runtime&, double tag, double initial) {
@@ -160,6 +167,42 @@ extern "C" JNIEXPORT void JNICALL Java_com_c9up_orbit_OrbitHost_nativeDispatch(
   std::string name(chars);
   env->ReleaseStringUTFChars(type, chars);
   // Scheduled onto the JS thread by the callback itself.
-  handler->call(static_cast<double>(tag), std::move(name), static_cast<double>(x), static_cast<double>(y));
+  handler->call(static_cast<double>(tag), std::move(name), static_cast<double>(x), static_cast<double>(y), std::string());
 }
 
+
+// A text field's event (`topChange`, `topFocus`, `topBlur`, `topSubmit`) with its text.
+extern "C" JNIEXPORT void JNICALL Java_com_c9up_orbit_OrbitHost_nativeDispatchText(
+    JNIEnv* env, jclass, jint tag, jstring type, jstring text) {
+  using namespace facebook::react;
+  std::shared_ptr<OrbitEventHandler> handler;
+  {
+    std::lock_guard<std::mutex> lock(gHandlerMutex);
+    handler = gHandler;
+  }
+  if (!handler) {
+    return;
+  }
+  auto read = [env](jstring s) {
+    const char* chars = env->GetStringUTFChars(s, nullptr);
+    std::string out(chars);
+    env->ReleaseStringUTFChars(s, chars);
+    return out;
+  };
+  handler->call(static_cast<double>(tag), read(type), 0.0, 0.0, read(text));
+}
+
+// The safe area (dp) changed: remembered, and sent to JS if it listens.
+extern "C" JNIEXPORT void JNICALL Java_com_c9up_orbit_OrbitHost_nativeViewport(JNIEnv*, jclass, jfloat width, jfloat height) {
+  using namespace facebook::react;
+  std::shared_ptr<OrbitEventHandler> handler;
+  {
+    std::lock_guard<std::mutex> lock(gHandlerMutex);
+    gViewportWidth = width;
+    gViewportHeight = height;
+    handler = gHandler;
+  }
+  if (handler) {
+    handler->call(0.0, std::string("topViewport"), static_cast<double>(width), static_cast<double>(height), std::string());
+  }
+}

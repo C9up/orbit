@@ -31,8 +31,9 @@ export class FakeHost implements OrbitHost {
 	readonly motion: Array<[string, ...unknown[]]> = [];
 	root: number | null = null;
 	viewport: [number, number] = [0, 0];
-	handler: ((tag: number, type: string, x: number, y: number) => void) | null =
-		null;
+	handler:
+		| ((tag: number, type: string, x: number, y: number, data: string) => void)
+		| null = null;
 
 	setViewport(width: number, height: number): void {
 		this.viewport = [width, height];
@@ -80,7 +81,13 @@ export class FakeHost implements OrbitHost {
 	}
 
 	setEventHandler(
-		handler: (tag: number, type: string, x: number, y: number) => void,
+		handler: (
+			tag: number,
+			type: string,
+			x: number,
+			y: number,
+			data: string,
+		) => void,
 	): void {
 		this.handler = handler;
 	}

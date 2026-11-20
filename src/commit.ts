@@ -144,8 +144,20 @@ export function mountTree(tree: NativeNode, options: MountOptions): Root {
 	const root = new Root(host, tree);
 	setDirtyListener(() => root.schedule());
 	host.setViewport(options.viewport.width, options.viewport.height);
-	host.setEventHandler((tag, type, x, y) => {
-		const payload = { pageX: x, pageY: y, locationX: x, locationY: y };
+	host.setEventHandler((tag, type, x, y, data) => {
+		if (type === "topViewport") {
+			// The window resized (the keyboard came or went): lay out again.
+			host.setViewport(x, y);
+			root.commit();
+			return;
+		}
+		const payload = {
+			pageX: x,
+			pageY: y,
+			locationX: x,
+			locationY: y,
+			text: data,
+		};
 		for (let node = byTag.get(tag) ?? null; node; node = node.parent) {
 			if (node.onEvent) {
 				node.onEvent(type, payload);

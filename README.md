@@ -43,9 +43,18 @@ mount(Counter({}), { viewport: Dimensions.get("window") });
 | `@click=${fn}` | a press: fires on release if the finger stayed put |
 | `motion=${{ opacity, translateX, translateY, scale }}` | UI-thread animation (`MotionValue`) |
 | `scroll-y=${value}` | the scroll offset feeds a `MotionValue` |
+| `input`, `textarea` | the platform's text field (`EditText`): typing never waits for JS |
+| `@input`, `@change`, `@focus`, `@blur`, Enter as `@keydown` | the field's events, `event.target.value` carrying the text |
+| `.value=${() => text()}` | sets the field only when the app changes it, never over what is being typed |
+| `field-sizing-content` (+ `max-h-*`) | a `textarea` that grows with its lines, up to its maximum |
 
-Not mapped yet (`E_ORBIT_UNSUPPORTED_ELEMENT`): `input`, `textarea`, `select`,
-`img`, `svg`, `canvas`. Keyed lists, press feedback, line height and
+Both read `placeholder`, `maxlength`, `autocomplete`, `inputmode` and
+`disabled`; `input` reads `type` for the keyboard and for a password field,
+`textarea` reads `rows`. The root lays out inside the safe area: the status bar, the navigation
+buttons, a display cutout and the open keyboard are kept clear of content.
+
+Not mapped yet (`E_ORBIT_UNSUPPORTED_ELEMENT`): `select`, `img`, `svg`,
+`canvas`. Keyed lists, press feedback, line height and
 accessibility are still to come; the Tailwind subset is hand-written until it
 is compiled from nebula's theme.
 

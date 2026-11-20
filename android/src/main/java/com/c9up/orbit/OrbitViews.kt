@@ -41,6 +41,7 @@ fun View.applyLook(fill: Int, borderColor: Int, borderWidth: Float, radius: Floa
 
 fun frameOf(view: View): FloatArray? =
   (view as? OrbitBox)?.frame ?: (view as? OrbitTextView)?.frame ?: (view as? OrbitScroll)?.frame
+    ?: (view as? OrbitInput)?.frame
 
 /** Native scrolling: the content child's frame (from orbit-host) sets the range. */
 class OrbitScroll(context: Context) : ScrollView(context), Framed {
@@ -97,11 +98,61 @@ open class OrbitBox(context: Context) : ViewGroup(context), Framed {
 }
 
 /** The surface root: fills the activity and turns touches into JS events. */
+/**
+ * The surface root: fills the activity and turns touches into JS events.
+ *
+ * Apps run edge to edge (React Native's default), so the window does not
+ * shrink for the system bars or the keyboard. The root lays orbit's tree out
+ * in the safe area instead — inside the status bar, the navigation bar, the
+ * display cutout and the keyboard — and reports that area as the viewport.
+ */
 class OrbitRoot(context: Context) : OrbitBox(context) {
   private var target: Int? = null
+  private val insets = IntArray(4)
+  private var reported = Pair(-1f, -1f)
+
+  /** The safe area; orbit-host's root view is mounted in it. */
+  val content = OrbitBox(context)
+
+  init {
+    addView(content)
+    setOnApplyWindowInsetsListener { _, windowInsets ->
+      if (android.os.Build.VERSION.SDK_INT >= 30) {
+        val types = android.view.WindowInsets.Type.systemBars() or
+          android.view.WindowInsets.Type.displayCutout() or
+          android.view.WindowInsets.Type.ime()
+        val i = windowInsets.getInsets(types)
+        insets[0] = i.left; insets[1] = i.top; insets[2] = i.right; insets[3] = i.bottom
+      } else {
+        @Suppress("DEPRECATION")
+        run {
+          insets[0] = windowInsets.systemWindowInsetLeft
+          insets[1] = windowInsets.systemWindowInsetTop
+          insets[2] = windowInsets.systemWindowInsetRight
+          insets[3] = windowInsets.systemWindowInsetBottom
+        }
+      }
+      requestLayout()
+      windowInsets
+    }
+  }
 
   override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
     setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), MeasureSpec.getSize(heightMeasureSpec))
+  }
+
+  override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+    val w = (r - l) - insets[0] - insets[2]
+    val h = (b - t) - insets[1] - insets[3]
+    content.frame[0] = insets[0].toFloat(); content.frame[1] = insets[1].toFloat()
+    content.frame[2] = w.toFloat(); content.frame[3] = h.toFloat()
+    content.layout(insets[0], insets[1], insets[0] + w, insets[1] + h)
+    val d = OrbitHost.density
+    val viewport = Pair(w / d, h / d)
+    if (viewport != reported && w > 0 && h > 0) {
+      reported = viewport
+      OrbitHost.reportViewport(viewport.first, viewport.second)
+    }
   }
 
   override fun dispatchTouchEvent(event: MotionEvent): Boolean {
@@ -122,7 +173,10 @@ class OrbitRoot(context: Context) : OrbitBox(context) {
       MotionEvent.ACTION_CANCEL -> "topTouchCancel"
       else -> return
     }
-    target?.let { OrbitHost.nativeDispatch(it, type, event.x / d, event.y / d) }
+    // In the safe area's coordinates, as JS lays out.
+    val x = (event.x - insets[0]) / d
+    val y = (event.y - insets[1]) / d
+    target?.let { OrbitHost.nativeDispatch(it, type, x, y) }
     if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) target = null
   }
 }

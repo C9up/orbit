@@ -34,10 +34,12 @@ const OP_FRAME: u8 = 4;
 const OP_VIEW_STYLE: u8 = 5;
 const OP_TEXT: u8 = 6;
 const OP_ROOT: u8 = 7;
+const OP_INPUT: u8 = 8;
 
 const KIND_VIEW: u8 = 0;
 const KIND_TEXT: u8 = 1;
 const KIND_SCROLL: u8 = 2;
+const KIND_INPUT: u8 = 3;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
@@ -46,6 +48,8 @@ enum Kind {
     Text,
     RawText,
     VirtualText,
+    /// A native text field: a layout leaf the platform measures by its font.
+    TextInput,
 }
 
 impl Kind {
@@ -55,11 +59,15 @@ impl Kind {
             "RCTRawText" => Kind::RawText,
             "RCTVirtualText" => Kind::VirtualText,
             "RCTScrollView" => Kind::Scroll,
+            "OrbitTextInput" => Kind::TextInput,
             _ => Kind::View,
         }
     }
     fn is_layout(self) -> bool {
-        matches!(self, Kind::View | Kind::Scroll | Kind::Text)
+        matches!(
+            self,
+            Kind::View | Kind::Scroll | Kind::Text | Kind::TextInput
+        )
     }
 }
 
@@ -404,6 +412,76 @@ fn put_f32(out: &mut Vec<u8>, v: f32) {
     out.extend_from_slice(&v.to_le_bytes());
 }
 
+const DEFAULT_INPUT_WIDTH: f32 = 160.0;
+
+/// What a text field is measured with: one sample line per row, in its font.
+fn encode_input_sample(props: &Map<String, Value>) -> Vec<u8> {
+    let style = text_style_of(props);
+    let rows = props
+        .get("rows")
+        .and_then(num)
+        .map(|r| r.max(1.0) as usize)
+        .unwrap_or(1);
+    // Sized by its content (CSS field-sizing): measured on what it holds,
+    // wraps included, so it grows with its lines; empty, it keeps its rows.
+    let content = props
+        .get("measureText")
+        .or_else(|| props.get("text"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let sized_by_content = props.get("fieldSizing").and_then(Value::as_str) == Some("content");
+    let sample = if sized_by_content && !content.is_empty() {
+        content.to_owned()
+    } else {
+        vec!["Mg"; rows].join("\n")
+    };
+    let mut out = vec![0u8];
+    put_f32(&mut out, style.line_height.unwrap_or(0.0));
+    put_i32(&mut out, 1);
+    put_i32(&mut out, style.color.unwrap_or(0xFF00_0000u32 as i32));
+    put_f32(&mut out, style.size.unwrap_or(14.0));
+    let flags =
+        i32::from(style.bold.unwrap_or(false)) | (i32::from(style.italic.unwrap_or(false)) << 1);
+    put_i32(&mut out, flags);
+    put_i32(&mut out, sample.len() as i32);
+    out.extend_from_slice(sample.as_bytes());
+    out
+}
+
+/// A text field's mount payload: its props as JSON, plus the padding taffy
+/// placed around its text (the platform field insets its text by it).
+fn encode_input(props: &Map<String, Value>, layout: &taffy::Layout) -> Vec<u8> {
+    let mut field = Map::new();
+    for key in [
+        "placeholder",
+        "placeholderColor",
+        "multiline",
+        "rows",
+        "secure",
+        "keyboard",
+        "maxLength",
+        "editable",
+        "autocomplete",
+        "text",
+        "textVersion",
+        "fontSize",
+        "color",
+        "fontWeight",
+        "fontStyle",
+        "textAlign",
+    ] {
+        if let Some(v) = props.get(key) {
+            field.insert(key.to_owned(), v.clone());
+        }
+    }
+    let p = layout.padding;
+    field.insert(
+        "padding".to_owned(),
+        serde_json::json!([p.left, p.top, p.right, p.bottom]),
+    );
+    Value::Object(field).to_string().into_bytes()
+}
+
 impl Host {
     fn set_measure(&mut self, measure: MeasureFn) {
         self.measure = Some(measure);
@@ -415,6 +493,11 @@ impl Host {
 
     /// The attributed text of a Text node: its runs with inherited styles.
     fn encode_text(&self, tag: i32) -> Vec<u8> {
+        if let Some(node) = self.nodes.get(&tag) {
+            if node.kind == Kind::TextInput {
+                return encode_input_sample(&node.props);
+            }
+        }
         let mut runs: Vec<(TextStyle, String)> = Vec::new();
         let Some(node) = self.nodes.get(&tag) else {
             return Vec::new();
@@ -453,7 +536,7 @@ impl Host {
                     let style = text_style_of(&node.props).over(inherited);
                     self.collect_runs(&node.children, &style, runs);
                 }
-                Kind::View | Kind::Scroll => {}
+                Kind::View | Kind::Scroll | Kind::TextInput => {}
             }
         }
     }
@@ -462,7 +545,7 @@ impl Host {
     fn owning_text(&self, mut tag: i32) -> Option<i32> {
         loop {
             let node = self.nodes.get(&tag)?;
-            if node.kind == Kind::Text {
+            if matches!(node.kind, Kind::Text | Kind::TextInput) {
                 return Some(tag);
             }
             tag = *self.parent.get(&tag)?;
@@ -598,6 +681,12 @@ impl Host {
             .set_style(root_id, root_style)
             .map_err(|e| e.to_string())?;
         {
+            let inputs: HashSet<i32> = self
+                .nodes
+                .iter()
+                .filter(|(_, n)| n.kind == Kind::TextInput)
+                .map(|(t, _)| *t)
+                .collect();
             let Host {
                 tree,
                 spans,
@@ -661,6 +750,13 @@ impl Host {
                             .entry((hash, max_width.to_bits()))
                             .or_insert_with(|| call(max_width))
                     };
+                    // A field is as wide as its box says, like an HTML input:
+                    // its text does not size it. 160 dp when nothing does.
+                    let w = if inputs.contains(&tag) {
+                        DEFAULT_INPUT_WIDTH
+                    } else {
+                        w
+                    };
                     Size {
                         width: known.width.unwrap_or(w),
                         height: known.height.unwrap_or(h),
@@ -700,6 +796,7 @@ impl Host {
                 creates.push(match node.kind {
                     Kind::Text => KIND_TEXT,
                     Kind::Scroll => KIND_SCROLL,
+                    Kind::TextInput => KIND_INPUT,
                     _ => KIND_VIEW,
                 });
                 Mounted {
@@ -733,7 +830,16 @@ impl Host {
                 put_f32(&mut attrs, visual.opacity);
                 mounted.visual = Some(visual);
             }
-            if node.kind == Kind::Text {
+            if node.kind == Kind::TextInput {
+                let encoded = encode_input(&node.props, layout);
+                if encoded != mounted.text {
+                    attrs.push(OP_INPUT);
+                    put_i32(&mut attrs, tag);
+                    put_i32(&mut attrs, encoded.len() as i32);
+                    attrs.extend_from_slice(&encoded);
+                    mounted.text = encoded;
+                }
+            } else if node.kind == Kind::Text {
                 let encoded = self.spans.get(&tag).cloned().unwrap_or_default();
                 if encoded != mounted.text {
                     attrs.push(OP_TEXT);
@@ -1012,7 +1118,7 @@ mod tests {
                 OP_CHILDREN => 4 + 4 * i32_at(i),
                 OP_FRAME => 16,
                 OP_VIEW_STYLE => 20,
-                OP_TEXT => 4 + i32_at(i),
+                OP_TEXT | OP_INPUT => 4 + i32_at(i),
                 _ => panic!("unknown op {code}"),
             };
         }
@@ -1057,6 +1163,59 @@ mod tests {
         // Nothing changed: nothing to mount.
         let (third, _) = commit(&mut host, "[]");
         assert!(third.is_empty());
+    }
+
+    #[test]
+    fn a_text_field_is_a_measured_leaf_with_its_props_and_padding() {
+        let mut host = Host::default();
+        host.set_viewport(300.0, 600.0);
+        let (first, _) = commit(
+            &mut host,
+            r#"[["c",1,"RCTView",{"flexDirection":"row","alignItems":"center"}],
+                ["c",3,"OrbitTextInput",{"padding":12,"fontSize":16,"placeholder":"Message","text":"","textVersion":0}],
+                ["k",1,[3]],["r",1]]"#,
+        );
+        assert!(codes(&first).contains(&OP_INPUT));
+        let field = host.tree.layout(host.nodes[&3].taffy.unwrap()).unwrap();
+        // No width from its box in a row: the default; height: one line + padding.
+        assert_eq!(field.size.width, DEFAULT_INPUT_WIDTH + 24.0);
+        assert_eq!(field.size.height, 16.0 + 24.0);
+        let json = String::from_utf8_lossy(&first);
+        assert!(
+            json.contains(r#""padding":[12.0,12.0,12.0,12.0]"#),
+            "{json}"
+        );
+        assert!(json.contains(r#""placeholder":"Message""#), "{json}");
+
+        // The app clears the field: one INPUT op, nothing else.
+        let (second, _) = commit(&mut host, r#"[["u",3,{"text":"","textVersion":1}]]"#);
+        assert_eq!(codes(&second), vec![OP_INPUT]);
+    }
+
+    #[test]
+    fn a_field_sized_by_its_content_grows_with_its_lines() {
+        let mut host = Host::default();
+        host.set_viewport(300.0, 600.0);
+        commit(
+            &mut host,
+            r#"[["c",1,"RCTView",{"alignItems":"flex-start"}],
+                ["c",3,"OrbitTextInput",{"multiline":true,"rows":1,"fieldSizing":"content","maxHeight":40,"fontSize":16}],
+                ["k",1,[3]],["r",1]]"#,
+        );
+        let height = |host: &Host| {
+            host.tree
+                .layout(host.nodes[&3].taffy.unwrap())
+                .unwrap()
+                .size
+                .height
+        };
+        assert_eq!(height(&host), 16.0);
+        // Desktop fallback measure: 16 dp a line, whatever the line count — so
+        // what this checks is that the measured text changes, and max-h caps it.
+        commit(&mut host, r#"[["u",3,{"measureText":"un\ndeux"}]]"#);
+        assert!(host.spans[&3].ends_with(b"un\ndeux"));
+        commit(&mut host, r#"[["u",3,{"maxHeight":8}]]"#);
+        assert_eq!(height(&host), 8.0);
     }
 
     #[test]

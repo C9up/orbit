@@ -17,6 +17,7 @@ const COLOR_KEYS = new Set([
 	"color",
 	"borderColor",
 	"shadowColor",
+	"placeholderColor",
 ]);
 
 // Tags the host keys its views by. Even numbers from 2^30, out of the way of

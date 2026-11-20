@@ -8,7 +8,8 @@ export interface Spec extends TurboModule {
   /** Commit a JSON batch of tree ops; returns the host's JSON report. */
   readonly commit: (ops: string) => string;
   /** Touches on host views, as React Native's touch event types, in dp. */
-  readonly setEventHandler: (handler: (tag: number, type: string, x: number, y: number) => void) => void;
+  /** Touches (dp), text-field events with their text in `data`, `topViewport` on tag 0 (window resized). */
+  readonly setEventHandler: (handler: (tag: number, type: string, x: number, y: number, data: string) => void) => void;
 
   // UI-thread animation, driven by orbit-host on every vsync (no JS per frame).
   readonly motionValue: (tag: number, initial: number) => void;

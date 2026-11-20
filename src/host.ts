@@ -10,9 +10,20 @@ export interface OrbitHost {
 	setViewport(width: number, height: number): void;
 	/** Apply a JSON batch of tree operations; returns the host's JSON report. */
 	commit(ops: string): string;
-	/** Touches on host views, as React Native's touch event types, in dp. */
+	/**
+	 * Events from host views: touches (React Native's touch event types, in dp),
+	 * text fields (`topChange`, `topFocus`, `topBlur`, `topSubmit`, with the
+	 * text in `data`), and `topViewport` on tag 0 when the window resized (the
+	 * keyboard), with `x`/`y` the new size in dp.
+	 */
 	setEventHandler(
-		handler: (tag: number, type: string, x: number, y: number) => void,
+		handler: (
+			tag: number,
+			type: string,
+			x: number,
+			y: number,
+			data: string,
+		) => void,
 	): void;
 	motionValue(tag: number, initial: number): void;
 	motionInterpolate(
