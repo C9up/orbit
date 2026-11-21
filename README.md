@@ -179,6 +179,39 @@ const Home = component(() => {
 Nothing here knows URLs: a router, or server-driven pages, pushes the screen
 a URL names.
 
+## Server-driven pages
+
+```ts
+import { serverPages } from '@c9up/orbit/pages'
+import Home from './pages/Home.js'
+import Orders from './pages/Orders.js'
+
+run(() => html`${serverPages({ server: 'https://app.example', pages: { Home, Orders } })}`)
+```
+
+The ream server stays the router: the app asks it for the first page object,
+and each link or `router.visit()` asks for the next one, through photon's
+protocol — the one the browser speaks after aurora's `visits: true`. The same
+controller answers both; the app shows the page it names, an aurora
+component bundled with the app (the very module the browser loads, when the
+page imports from `@c9up/aurora` and `@c9up/photon/client/core`).
+
+- Each page is a screen of a stack: a visit to a new address slides one in;
+  a partial reload, a deferred prop or a redirect back to the same address
+  replaces it in place.
+- The back button goes through photon's history: the covered page comes back
+  as it was left, without a request.
+- A stale version (the server was deployed again) starts over from the page
+  asked for, as a browser's full load does.
+- Requests carry the session cookie (`credentials: 'include'`) and echo the
+  `XSRF-TOKEN` the server set; a link off the server goes to `open`.
+- `server` must be https; plain http only reaches this machine (`localhost`,
+  through `adb reverse`) or the emulator's host (`10.0.2.2`).
+- An `<a href>` in a view is a touch target of its own; one inside a sentence
+  (`<p>… <a>…</a> …</p>`) is not pressable yet.
+- React Native's `URL` resolves relative references wrongly; the app entry
+  installs a standard one (`installStandardUrl()` for an app wired by hand).
+
 ## Long lists
 
 `each(items, key, render, { lazy: { estimate, overscan, from } })` builds only

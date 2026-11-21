@@ -90,6 +90,36 @@ const INLINE = new Set([
 ]);
 const UNSUPPORTED = new Set(["select", "canvas", "iframe"]);
 
+/**
+ * Inline, as CSS lays it out: a run inside the surrounding text. An `<a>`
+ * holding blocks (a card that is a link) is a block, as HTML lets it be.
+ */
+function isInline(n: TElement): boolean {
+	if (!INLINE.has(n.tag)) return false;
+	if (n.tag !== "a") return true;
+	return n.children.every((child) => child.kind !== "el" || isInline(child));
+}
+
+/**
+ * A link: an `<a href>`. Sitting in a view, it is a touch target of its own
+ * rather than a run of the text around it — a native text's runs cannot be
+ * pressed one by one — so links in a block (`<nav>`, `<li>`) each take their
+ * line, as a row of them does in a `flex` parent.
+ */
+function isLink(n: TElement): boolean {
+	return n.tag === "a" && n.attrs.some((attr) => attr.name === "href");
+}
+
+/** Where a pressed `<a href>` goes: server-driven pages set it (`@c9up/orbit/pages`). */
+let followLink: ((href: string) => void) | undefined;
+
+/** @internal Who follows a pressed link; `undefined` leaves links inert. */
+export function setLinkHandler(
+	handler: ((href: string) => void) | undefined,
+): void {
+	followLink = handler;
+}
+
 // Tailwind's preflight resets headings; only these keep a user-agent look.
 const TAG_TEXT: { [tag: string]: Style } = {
 	strong: { fontWeight: "700" },
@@ -227,7 +257,7 @@ function parse(strings: TemplateStringsArray): TNode[] {
 }
 
 const isBlock = (n: TNode | undefined) =>
-	n === undefined || (n.kind === "el" && !INLINE.has(n.tag));
+	n === undefined || (n.kind === "el" && !isInline(n));
 
 // A space next to a block boundary renders nothing in CSS; next to inline content it stays.
 function trimAtBlocks(children: TNode[]): void {
@@ -699,7 +729,9 @@ function readAttrs(el: TElement, values: readonly unknown[]): Attrs {
 		scrollY: null,
 		attributes: new Map(),
 	};
+	let href: TAttr | undefined;
 	for (const attr of el.attrs) {
+		if (attr.name === "href") href = attr;
 		if (attr.name === "class") {
 			const reactive = attr.parts.some(
 				(p) => typeof p === "number" && isGetter(values[p]),
@@ -735,6 +767,21 @@ function readAttrs(el: TElement, values: readonly unknown[]): Attrs {
 			// data-*, aria-*, disabled, role…: what the style table's variants test.
 			attrs.attributes.set(attr.name, attrValue(attr, values));
 		}
+	}
+	// A link follows its href when pressed, unless the template handles the press.
+	const follow = followLink;
+	if (
+		el.tag === "a" &&
+		href !== undefined &&
+		follow !== undefined &&
+		!attrs.gestures.has("@click")
+	) {
+		const target = href;
+		attrs.gestures.set("@click", () => {
+			const value = attrValue(target, values);
+			const url = str(isGetter(value) ? value() : value);
+			if (url !== "") follow(url);
+		});
 	}
 	return attrs;
 }
@@ -1375,7 +1422,7 @@ function element(
 	if (el.tag === "img") return imgElement(el, values, attrs, s, ctx);
 	if (el.tag === "svg") return svgElement(el, values, ctx, attrs, s);
 	const own = TAG_TEXT[el.tag] ?? {};
-	if (TEXT_BLOCK.has(el.tag) || INLINE.has(el.tag)) {
+	if (TEXT_BLOCK.has(el.tag) || isInline(el)) {
 		const node = new NativeNode(
 			"RCTText",
 			{},
@@ -1411,7 +1458,7 @@ function virtualText(
 	values: readonly unknown[],
 	ctx: Ctx,
 ): NativeNode {
-	if (!INLINE.has(el.tag) && !TEXT_BLOCK.has(el.tag)) {
+	if (!isInline(el) && !TEXT_BLOCK.has(el.tag)) {
 		throw new OrbitError(
 			"E_ORBIT_BLOCK_IN_TEXT",
 			`[orbit] <${el.tag}> cannot sit inside text on native`,
@@ -1502,7 +1549,7 @@ function viewChildren(
 	for (const n of nodes) {
 		if (flexItems) flushRun();
 		if (n.kind === "el") {
-			if (INLINE.has(n.tag) && !flexItems) {
+			if (isInline(n) && !flexItems && !isLink(n)) {
 				run.push(virtualText(n, values, ctx));
 			} else {
 				flushRun();

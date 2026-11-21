@@ -11,7 +11,8 @@
  * and the app's style table, and mounts the root component with the launch
  * props (intent extras). The
  * back button and the back gesture pop the innermost shown stack; with none
- * to pop, the app goes back as any Android app does.
+ * to pop, the app goes back as any Android app does. React Native's `URL` is
+ * replaced by a standard one when it is not one (see `url.ts`).
  */
 import type { TemplateResult } from "@c9up/aurora/renderer";
 // The app's style table: `ream android:*` compiles the app's Tailwind build
@@ -28,6 +29,12 @@ import { NATIVE_MODULE_NAME, type OrbitHost, useHost } from "../host.js";
 import { goBack } from "../stack.js";
 import { useStyles } from "../styles.js";
 import { mount } from "../template.js";
+import { installStandardUrl } from "../url.js";
+
+// Before the app's own modules run: React Native's URL resolves a relative
+// reference by appending it to the base, and photon's router (and any code
+// shared with the browser) needs the standard one.
+installStandardUrl();
 
 /** The name the generated activity starts the app by. */
 export const APP_NAME = "main";

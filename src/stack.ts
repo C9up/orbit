@@ -70,6 +70,12 @@ export interface StackOptions {
 	 * or the covered screen shows through them while a transition runs.
 	 */
 	background?: string;
+	/**
+	 * What the back button does when it reaches this stack, in place of
+	 * `pop()`: true when it went back. Server-driven pages ask photon, whose
+	 * history knows which page comes back.
+	 */
+	back?: () => boolean;
 }
 
 const ScreenContext = createContext<Screen | undefined>(
@@ -125,7 +131,7 @@ const shown: Stack[] = [];
 export function goBack(): boolean {
 	for (let i = shown.length - 1; i >= 0; i--) {
 		const stack = shown[i];
-		if (stack?.isShown() && stack.pop()) return true;
+		if (stack?.isShown() && stack.back()) return true;
 	}
 	return false;
 }
@@ -136,6 +142,7 @@ export class Stack implements Navigator {
 	readonly #transition: "slide" | "none";
 	readonly #duration: number;
 	readonly #background: string | undefined;
+	readonly #back: (() => boolean) | undefined;
 	readonly #depth = signal(1);
 	#entries: Entry[] = [];
 	#leaving: Entry[] = [];
@@ -147,6 +154,7 @@ export class Stack implements Navigator {
 		this.#transition = options.transition ?? "slide";
 		this.#duration = options.duration ?? 300;
 		this.#background = options.background;
+		this.#back = options.back;
 		this.#entries = [this.#entry(initial)];
 	}
 
@@ -186,6 +194,33 @@ export class Stack implements Navigator {
 		this.#entries.push(entry);
 		if (old) this.#leave(old, false);
 		if (this.#container) this.#show(entry, true);
+	}
+
+	/**
+	 * Swap the top screen for `screen` at once, with no transition: the same
+	 * place showing something new (a page reloaded with new props).
+	 */
+	replaceInPlace<P>(screen: ScreenComponent<P>, props: P): void {
+		const entry = this.#entry(() => screen(props));
+		const old = this.#entries.pop();
+		this.#entries.push(entry);
+		if (old) this.#leave(old, false, false);
+		if (this.#container) this.#show(entry, false);
+	}
+
+	/** End every screen and start again from `screen`, at once. */
+	reset<P>(screen: ScreenComponent<P>, props: P): void {
+		const entry = this.#entry(() => screen(props));
+		const old = this.#entries.splice(0);
+		this.#entries = [entry];
+		this.#depth(1);
+		for (const ended of old) this.#leave(ended, false, false);
+		if (this.#container) this.#show(entry, false);
+	}
+
+	/** What the back button does here: the `back` option, or `pop()`. */
+	back(): boolean {
+		return this.#back === undefined ? this.pop() : this.#back();
 	}
 
 	canGoBack(): boolean {
@@ -321,12 +356,12 @@ export class Stack implements Navigator {
 	 * view goes once the transition is over: sliding out to the right when
 	 * popped, staying under its replacement when replaced.
 	 */
-	#leave(entry: Entry, slide: boolean): void {
+	#leave(entry: Entry, slide: boolean, animate = true): void {
 		entry.top(false);
 		for (const end of entry.disposers.splice(0)) end();
 		if (!entry.view) return;
 		this.#leaving.push(entry);
-		const animated = this.#animated();
+		const animated = animate && this.#animated();
 		if (animated && slide) {
 			entry.x?.timing(this.#width(), { duration: this.#duration });
 		}

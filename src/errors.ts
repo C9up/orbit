@@ -31,7 +31,11 @@ export type OrbitErrorCode =
 	/** One stack put in two places: a stack is shown once. */
 	| "E_ORBIT_STACK_SHOWN"
 	/** `useStyles` got something other than a table `ream css:compile` wrote. */
-	| "E_ORBIT_STYLE_TABLE";
+	| "E_ORBIT_STYLE_TABLE"
+	/** `serverPages({ server })` over plain http to a host that is not this machine or the emulator's. */
+	| "E_ORBIT_INSECURE_SERVER"
+	/** The server named a page the app does not have (`serverPages({ pages })`). */
+	| "E_ORBIT_UNKNOWN_PAGE";
 
 export class OrbitError extends Error {
 	readonly code: OrbitErrorCode;

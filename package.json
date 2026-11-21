@@ -1,7 +1,7 @@
 {
   "name": "@c9up/orbit",
   "version": "0.1.0",
-  "description": "Orbit — aurora components as native views on a phone, laid out and diffed by a Rust host",
+  "description": "Orbit \u2014 aurora components as native views on a phone, laid out and diffed by a Rust host",
   "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",
@@ -14,6 +14,10 @@
     "./react-native": {
       "types": "./src/react-native/index.ts",
       "import": "./src/react-native/index.ts"
+    },
+    "./pages": {
+      "types": "./src/pages.ts",
+      "import": "./src/pages.ts"
     }
   },
   "scripts": {
@@ -25,11 +29,13 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "peerDependencies": {
-    "@c9up/aurora": "^0.1.53"
+    "@c9up/aurora": "^0.1.53",
+    "@c9up/photon": "^0.1.25"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.12",
     "@c9up/aurora": "^0.1.53",
+    "@c9up/photon": "^0.1.25",
     "@tailwindcss/cli": "^4.3.3",
     "@vitest/coverage-v8": "4.1.11",
     "tailwindcss": "^4.3.3",
@@ -83,8 +89,17 @@
       "./react-native": {
         "types": "./dist/react-native/index.d.ts",
         "import": "./dist/react-native/index.js"
+      },
+      "./pages": {
+        "types": "./dist/pages.d.ts",
+        "import": "./dist/pages.js"
       }
     },
     "access": "public"
+  },
+  "peerDependenciesMeta": {
+    "@c9up/photon": {
+      "optional": true
+    }
   }
 }

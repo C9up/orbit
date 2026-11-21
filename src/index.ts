@@ -33,6 +33,8 @@ export {
 } from "./motion.js";
 export {
 	createStack,
+	/** What the back button does: pop the innermost shown stack (false: nothing to pop). */
+	goBack,
 	type Navigator,
 	type Screen,
 	type ScreenComponent,
@@ -47,3 +49,5 @@ export {
 	useStyles,
 } from "./styles.js";
 export { type GestureEvent, mount } from "./template.js";
+/** A standard `URL` in place of the platform's, when it is not one (React Native's). */
+export { installStandardUrl, StandardURL } from "./url.js";
