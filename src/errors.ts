@@ -10,7 +10,7 @@ export type OrbitErrorCode =
 	| "E_ORBIT_NO_HOST"
 	/** The native host refused a commit; the message carries its report. */
 	| "E_ORBIT_COMMIT_FAILED"
-	/** An element with no native mapping yet (`<select>`, `<svg>`, `<canvas>`…). */
+	/** An element with no native mapping yet (`<select>`, `<canvas>`, or `<text>` / a gradient inside an `<svg>`). */
 	| "E_ORBIT_UNSUPPORTED_ELEMENT"
 	/** A block element inside text: native text holds only inline runs. */
 	| "E_ORBIT_BLOCK_IN_TEXT"
