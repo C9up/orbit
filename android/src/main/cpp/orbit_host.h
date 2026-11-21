@@ -17,6 +17,8 @@ void orbit_set_measure(OrbitMeasureFn measure);
 void orbit_set_viewport(float width, float height);
 int32_t orbit_commit(const uint8_t* ops, size_t len, OrbitBuf* mountOps, OrbitBuf* info);
 int32_t orbit_layout(const uint8_t* tags, size_t len, OrbitBuf* out);
+void orbit_touch(uint8_t action, float x, float y, int64_t nowNs, int32_t hit, OrbitBuf* out);
+void orbit_gesture_tick(int64_t nowNs, OrbitBuf* out);
 void orbit_buf_free(OrbitBuf buf);
 
 void orbit_motion_value(int32_t tag, double initial);

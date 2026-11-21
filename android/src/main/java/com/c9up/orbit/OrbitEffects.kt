@@ -58,6 +58,20 @@ object OrbitEffects {
 
   fun radiusOf(view: View): Float = radii[view] ?: 0f
 
+  private val fills = WeakHashMap<View, Int>()
+
+  fun setFill(view: View, fill: Int) {
+    fills[view] = fill
+  }
+
+  /** A fill dark enough that a light ripple reads on it. */
+  fun isDark(view: View): Boolean {
+    val fill = fills[view] ?: return false
+    if ((fill ushr 24) < 0x80) return false
+    val luminance = 0.2126 * ((fill shr 16) and 0xff) + 0.7152 * ((fill shr 8) and 0xff) + 0.0722 * (fill and 0xff)
+    return luminance < 140
+  }
+
   fun setOpaque(view: View, isOpaque: Boolean) {
     if (isOpaque) opaque[view] = true else opaque.remove(view)
   }

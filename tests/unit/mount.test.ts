@@ -152,41 +152,54 @@ describe("mount", () => {
 	});
 });
 
-describe("press", () => {
-	function pressable() {
+describe("gestures", () => {
+	// orbit-host recognizes gestures on the UI thread (crates/orbit-host/src/gesture.rs,
+	// tested there); JS declares them and receives the outcome.
+	function row(handlers: string) {
 		const host = setup();
-		const clicks: string[] = [];
-		mount(
-			html`<div class="p-4" @click=${() => clicks.push("row")}><p>Ligne</p></div>`,
-			{ viewport },
-		);
-		const [textTag] = first(host.all("RCTText"));
-		const fire = (type: string, x: number, y: number) =>
-			host.handler?.(textTag, type, x, y, "");
-		return { clicks, fire };
+		const seen: Array<{ [key: string]: unknown }> = [];
+		const record = (event: { [key: string]: unknown }) => seen.push(event);
+		const templates: { [key: string]: ReturnType<typeof html> } = {
+			click: html`<div class="p-4" @click=${record}><p>Ligne</p></div>`,
+			all: html`<div class="p-4" @click=${record} @longpress=${record} @pan=${record} @swipe=${record}><p>Ligne</p></div>`,
+			none: html`<div class="p-4"><p>Ligne</p></div>`,
+		};
+		const template = templates[handlers];
+		if (!template) throw new Error(handlers);
+		mount(html`<div>${template}</div>`, { viewport });
+		const entry = host.all("RCTView").find(([, n]) => n.props.padding === 16);
+		if (!entry) throw new Error("no row");
+		const [tag, node] = entry;
+		const deliver = (type: string, data: string) =>
+			host.handler?.(tag, type, 0, 0, data);
+		return { node, seen, deliver };
 	}
 
-	it("fires on release, from a touch on a child, bubbling to the handler", () => {
-		const { clicks, fire } = pressable();
-		fire("topTouchStart", 10, 10);
-		fire("topTouchEnd", 12, 11);
-		expect(clicks).toEqual(["row"]);
+	it("tells the host which gestures a node listens to", () => {
+		expect(row("click").node.props.gestures).toBe(1);
+		expect(row("all").node.props.gestures).toBe(15);
+		expect(row("none").node.props.gestures).toBeUndefined();
 	});
 
-	it("does not fire when the finger travelled (a scroll or a swipe)", () => {
-		const { clicks, fire } = pressable();
-		fire("topTouchStart", 10, 10);
-		fire("topTouchMove", 10, 60);
-		fire("topTouchEnd", 10, 60);
-		expect(clicks).toEqual([]);
+	it("hands each recognized gesture to its handler, with its numbers", () => {
+		const { seen, deliver } = row("all");
+		deliver("topPress", '{"x":12,"y":11}');
+		deliver("topLongPress", '{"x":12,"y":11}');
+		deliver("topPan", '{"phase":"move","dx":-30,"dy":2,"vx":-400,"vy":10}');
+		deliver("topSwipe", '{"direction":"left","vx":-900,"vy":0}');
+		expect(seen).toEqual([
+			{ type: "click", x: 12, y: 11 },
+			{ type: "longpress", x: 12, y: 11 },
+			{ type: "pan", phase: "move", dx: -30, dy: 2, vx: -400, vy: 10 },
+			{ type: "swipe", direction: "left", vx: -900, vy: 0 },
+		]);
 	});
 
-	it("does not fire after a cancel", () => {
-		const { clicks, fire } = pressable();
-		fire("topTouchStart", 10, 10);
-		fire("topTouchCancel", 10, 10);
-		fire("topTouchEnd", 10, 10);
-		expect(clicks).toEqual([]);
+	it("ignores what it did not ask for, and data it cannot read", () => {
+		const { seen, deliver } = row("click");
+		deliver("topSwipe", '{"direction":"left"}');
+		deliver("topPress", "not json");
+		expect(seen).toEqual([{ type: "click" }]);
 	});
 });
 

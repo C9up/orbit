@@ -262,6 +262,33 @@ extern "C" JNIEXPORT void JNICALL Java_com_c9up_orbit_OrbitHost_nativeDispatchTe
   handler->call(static_cast<double>(tag), read(type), 0.0, 0.0, read(text));
 }
 
+namespace {
+jbyteArray toBytes(JNIEnv* env, OrbitBuf buf) {
+  jbyteArray result = env->NewByteArray(static_cast<jsize>(buf.len));
+  if (buf.len > 0) {
+    env->SetByteArrayRegion(result, 0, static_cast<jsize>(buf.len), reinterpret_cast<const jbyte*>(buf.ptr));
+  }
+  orbit_buf_free(buf);
+  return result;
+}
+} // namespace
+
+// UI thread: a touch for orbit-host's gesture recognizer; returns its commands.
+extern "C" JNIEXPORT jbyteArray JNICALL Java_com_c9up_orbit_OrbitHost_nativeTouch(
+    JNIEnv* env, jclass, jint action, jfloat x, jfloat y, jlong nowNs, jint hit) {
+  OrbitBuf out{};
+  orbit_touch(static_cast<uint8_t>(action), x, y, nowNs, hit, &out);
+  return toBytes(env, out);
+}
+
+// UI thread, every vsync: long presses and delayed press feedback.
+extern "C" JNIEXPORT jbyteArray JNICALL Java_com_c9up_orbit_OrbitHost_nativeGestureTick(
+    JNIEnv* env, jclass, jlong nowNs) {
+  OrbitBuf out{};
+  orbit_gesture_tick(nowNs, &out);
+  return toBytes(env, out);
+}
+
 // The safe area (dp) changed: remembered, and sent to JS if it listens.
 extern "C" JNIEXPORT void JNICALL Java_com_c9up_orbit_OrbitHost_nativeViewport(JNIEnv*, jclass, jfloat width, jfloat height) {
   using namespace facebook::react;

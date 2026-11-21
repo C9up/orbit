@@ -17,6 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
+pub mod gesture;
 pub mod motion;
 
 use serde_json::{Map, Value};
@@ -401,6 +402,15 @@ fn visual_of(props: &Map<String, Value>) -> Visual {
     }
 }
 
+/// The gestures a node's handlers ask for (see `gesture`).
+fn gesture_flags(props: &Map<String, Value>) -> u8 {
+    props
+        .get("gestures")
+        .and_then(Value::as_u64)
+        .map(|n| (n & 0xff) as u8)
+        .unwrap_or(0)
+}
+
 fn effects_of(props: &Map<String, Value>) -> Effects {
     let length = |key: &str| props.get(key).and_then(num).unwrap_or(0.0);
     Effects {
@@ -650,6 +660,10 @@ impl Host {
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .to_owned();
+                    if kind.is_layout() {
+                        let flags = gesture_flags(&props);
+                        gesture::with(|g| g.set_node(tag, flags, kind == Kind::Scroll));
+                    }
                     let taffy = if kind.is_layout() {
                         Some(
                             self.tree
@@ -678,6 +692,11 @@ impl Host {
                         .cloned()
                         .unwrap_or_default();
                     if let Some(node) = self.nodes.get_mut(&tag) {
+                        if patch.contains_key("gestures") && node.kind.is_layout() {
+                            let flags = gesture_flags(&patch);
+                            let scroll = node.kind == Kind::Scroll;
+                            gesture::with(|g| g.set_node(tag, flags, scroll));
+                        }
                         if let Some(t) = patch.get("text").and_then(Value::as_str) {
                             node.text = t.to_owned();
                         }
@@ -704,6 +723,11 @@ impl Host {
                     for child in &children {
                         self.parent.insert(*child, tag);
                     }
+                    gesture::with(|g| {
+                        for child in &children {
+                            g.set_parent(*child, tag);
+                        }
+                    });
                     let layout_children: Vec<NodeId> = children
                         .iter()
                         .filter_map(|c| self.nodes.get(c).and_then(|n| n.taffy))
@@ -1002,6 +1026,7 @@ impl Host {
             }
             self.parent.remove(&tag);
             self.spans.remove(&tag);
+            gesture::with(|g| g.remove(tag));
             info.deleted.push(tag);
         }
         info.nodes = self.nodes.len();
@@ -1073,6 +1098,36 @@ fn info_json(info: &CommitInfo, ops_bytes: usize) -> String {
         "opsBytes": ops_bytes,
     })
     .to_string()
+}
+
+/// A touch from the UI thread (see `gesture::Gestures::touch`); `out`
+/// receives the commands.
+///
+/// # Safety
+/// `out` must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn orbit_touch(
+    action: u8,
+    x: f32,
+    y: f32,
+    now_ns: i64,
+    hit: i32,
+    out: *mut OrbitBuf,
+) {
+    let mut commands = Vec::new();
+    gesture::with(|g| g.touch(action, x, y, now_ns, hit, &mut commands));
+    *out = OrbitBuf::from_vec(commands);
+}
+
+/// Every vsync on the UI thread: long presses and delayed feedback.
+///
+/// # Safety
+/// `out` must be valid.
+#[no_mangle]
+pub unsafe extern "C" fn orbit_gesture_tick(now_ns: i64, out: *mut OrbitBuf) {
+    let mut commands = Vec::new();
+    gesture::with(|g| g.tick(now_ns, &mut commands));
+    *out = OrbitBuf::from_vec(commands);
 }
 
 /// The frames of a JSON array of tags, as a JSON array of `[x, y, w, h]` or
@@ -1435,6 +1490,35 @@ mod tests {
             r#"[["u",3,{"shadowY":null,"shadowBlur":null,"shadowSpread":null,"shadowColor":null}]]"#,
         );
         assert_eq!(codes(&third), vec![OP_EFFECTS]);
+    }
+
+    #[test]
+    fn a_commit_keeps_the_gesture_tree_the_ui_thread_recognizes_on() {
+        // Tags of their own: the gesture tree is shared by every host in the process.
+        let mut host = Host::default();
+        commit(
+            &mut host,
+            r#"[["c",901,"RCTScrollView",{}],["c",903,"RCTView",{}],
+                ["c",905,"RCTView",{"height":40,"gestures":1}],["c",907,"RCTText",{}],
+                ["k",905,[907]],["k",903,[905]],["k",901,[903]],["r",901]]"#,
+        );
+        let tap = |host_tag: i32| {
+            let mut out = Vec::new();
+            gesture::with(|g| {
+                g.touch(gesture::DOWN, 5.0, 5.0, 0, host_tag, &mut out);
+                g.touch(gesture::UP, 5.0, 5.0, 300_000_000, host_tag, &mut out);
+            });
+            out
+        };
+        // A tap on the row's text presses the row (in a scroll view: the
+        // feedback flashes on release, then the event).
+        let out = tap(907);
+        assert_eq!(out.first(), Some(&gesture::CMD_PRESSED));
+        assert_eq!(out[1..5], 905i32.to_le_bytes());
+        assert!(out.windows(8).any(|w| w == b"topPress"));
+        // Its handler gone: nothing.
+        commit(&mut host, r#"[["u",905,{"gestures":0}]]"#);
+        assert!(tap(907).is_empty());
     }
 
     #[test]

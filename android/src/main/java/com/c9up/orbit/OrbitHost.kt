@@ -37,6 +37,13 @@ object OrbitHost {
 
   @JvmStatic external fun nativeViewport(width: Float, height: Float)
 
+  /** A touch for orbit-host's gesture recognizer (action 0 down, 1 move, 2 up, 3 cancel; dp). */
+  @JvmStatic external fun nativeTouch(action: Int, x: Float, y: Float, nowNs: Long, hit: Int): ByteArray
+
+  @JvmStatic external fun nativeGestureTick(nowNs: Long): ByteArray
+
+  fun viewOf(tag: Int): View? = views[tag]
+
   /** The safe area changed (bars, cutout, keyboard): JS lays out again, now or once it listens. */
   fun reportViewport(width: Float, height: Float) = nativeViewport(width, height)
 
@@ -53,6 +60,7 @@ object OrbitHost {
       val scrolls = views.values.filterIsInstance<OrbitScroll>()
       val tags = IntArray(scrolls.size) { scrolls[it].tag as Int }
       val ys = FloatArray(scrolls.size) { scrolls[it].scrollY / density }
+      root?.let { OrbitPress.apply(it, nativeGestureTick(frameTimeNanos)) }
       val out = nativeTick(frameTimeNanos, tags, ys)
       val buf = ByteBuffer.wrap(out, 1, out.size - 1).order(ByteOrder.LITTLE_ENDIAN)
       if (buf.remaining() >= 9) OrbitEffects.invalidateBackdrops()
@@ -216,8 +224,10 @@ object OrbitHost {
   fun hitTest(group: ViewGroup, x: Float, y: Float): Int? {
     for (i in group.childCount - 1 downTo 0) {
       val child = group.getChildAt(i)
-      if (x >= child.left && x < child.right && y >= child.top && y < child.bottom) {
-        val inner = (child as? ViewGroup)?.let { hitTest(it, x - child.left + child.scrollX, y - child.top + child.scrollY) }
+      val left = child.left + child.translationX
+      val top = child.top + child.translationY
+      if (child.visibility == View.VISIBLE && x >= left && x < left + child.width && y >= top && y < top + child.height) {
+        val inner = (child as? ViewGroup)?.let { hitTest(it, x - left + child.scrollX, y - top + child.scrollY) }
         return inner ?: (child.tag as? Int)
       }
     }

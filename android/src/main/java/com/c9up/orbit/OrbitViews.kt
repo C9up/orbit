@@ -33,6 +33,7 @@ fun View.applyFrame(frame: FloatArray) {
 fun View.applyLook(fill: Int, borderColor: Int, borderWidth: Float, radius: Float, opacity: Float) {
   OrbitEffects.setRadius(this, radius)
   OrbitEffects.setOpaque(this, fill ushr 24 == 0xff && opacity >= 1f)
+  OrbitEffects.setFill(this, fill)
   invalidateOutline()
   background = if (fill == 0 && borderWidth == 0f) null else GradientDrawable().apply {
     setColor(fill)
@@ -164,7 +165,6 @@ open class OrbitBox(context: Context) : ViewGroup(context), Framed {
  * display cutout and the keyboard — and reports that area as the viewport.
  */
 class OrbitRoot(context: Context) : OrbitBox(context) {
-  private var target: Int? = null
   private val insets = IntArray(4)
   private var reported = Pair(-1f, -1f)
 
@@ -212,29 +212,40 @@ class OrbitRoot(context: Context) : OrbitBox(context) {
     }
   }
 
-  override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-    report(event)
-    super.dispatchTouchEvent(event)
-    return true
-  }
+  /** A view claimed the gesture under way: the views below no longer get it. */
+  private var claimed = false
 
-  private fun report(event: MotionEvent) {
-    val d = OrbitHost.density
-    val type = when (event.actionMasked) {
-      MotionEvent.ACTION_DOWN -> {
-        target = OrbitHost.hitTest(this, event.x, event.y)
-        "topTouchStart"
-      }
-      MotionEvent.ACTION_MOVE -> "topTouchMove"
-      MotionEvent.ACTION_UP -> "topTouchEnd"
-      MotionEvent.ACTION_CANCEL -> "topTouchCancel"
-      else -> return
+  /**
+   * Every touch goes to orbit-host's gesture recognizer first, on this
+   * thread: the press feedback starts here, whatever JS is doing. When a view
+   * claims the gesture (a pan across a scroll view), the views below get a
+   * cancel and nothing more until the finger lifts.
+   */
+  override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+    val action = when (event.actionMasked) {
+      MotionEvent.ACTION_DOWN -> 0
+      MotionEvent.ACTION_MOVE -> 1
+      MotionEvent.ACTION_UP -> 2
+      MotionEvent.ACTION_CANCEL -> 3
+      else -> -1
     }
-    // In the safe area's coordinates, as JS lays out.
-    val x = (event.x - insets[0]) / d
-    val y = (event.y - insets[1]) / d
-    target?.let { OrbitHost.nativeDispatch(it, type, x, y) }
-    if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) target = null
+    if (action == 0) claimed = false
+    if (action >= 0) {
+      val d = OrbitHost.density
+      val hit = if (action == 0) OrbitHost.hitTest(this, event.x, event.y) ?: 0 else 0
+      // In the safe area's coordinates, as JS lays out.
+      val commands = OrbitHost.nativeTouch(action, (event.x - insets[0]) / d, (event.y - insets[1]) / d, System.nanoTime(), hit)
+      if (OrbitPress.apply(this, commands) && !claimed) {
+        claimed = true
+        val cancel = MotionEvent.obtain(event)
+        cancel.action = MotionEvent.ACTION_CANCEL
+        super.dispatchTouchEvent(cancel)
+        cancel.recycle()
+      }
+    }
+    if (!claimed) super.dispatchTouchEvent(event)
+    if (action == 2 || action == 3) claimed = false
+    return true
   }
 }
 

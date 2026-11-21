@@ -158,8 +158,7 @@ describe("images", () => {
 			{ viewport },
 		);
 		const { tag } = image(host);
-		host.handler?.(tag, "topTouchStart", 1, 1, "");
-		host.handler?.(tag, "topTouchEnd", 1, 1, "");
+		host.handler?.(tag, "topPress", 0, 0, '{"x":1,"y":1}');
 		expect(clicks).toBe(1);
 	});
 });

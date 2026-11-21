@@ -647,9 +647,29 @@ function lazyRegion(
 
 // ─── Instantiation ───────────────────────────────────────────────
 
+/** What a gesture handler receives: the shape a DOM handler reads, plus the gesture's numbers. */
+export type GestureEvent = { type: string } & { [key: string]: unknown };
+type GestureHandler = (event: GestureEvent) => void;
+
+type GestureName = "@click" | "@longpress" | "@pan" | "@swipe";
+
+/** The gestures a template can listen to, and the flag orbit-host recognizes each by. */
+const GESTURES: Record<
+	GestureName,
+	{ flag: number; native: string; type: string }
+> = {
+	"@click": { flag: 1, native: "topPress", type: "click" },
+	"@longpress": { flag: 2, native: "topLongPress", type: "longpress" },
+	"@pan": { flag: 4, native: "topPan", type: "pan" },
+	"@swipe": { flag: 8, native: "topSwipe", type: "swipe" },
+};
+
+const isGestureName = (name: string): name is GestureName =>
+	Object.hasOwn(GESTURES, name);
+
 type Attrs = {
 	className: string | (() => string);
-	onClick: (() => void) | null;
+	gestures: Map<GestureName, GestureHandler>;
 	motion: MotionStyle | null;
 	scrollY: MotionValue | null;
 };
@@ -657,7 +677,7 @@ type Attrs = {
 function readAttrs(el: TElement, values: readonly unknown[]): Attrs {
 	const attrs: Attrs = {
 		className: "",
-		onClick: null,
+		gestures: new Map(),
 		motion: null,
 		scrollY: null,
 	};
@@ -675,10 +695,11 @@ function readAttrs(el: TElement, values: readonly unknown[]): Attrs {
 					})
 					.join("");
 			attrs.className = reactive ? compute : compute();
-		} else if (attr.name === "@click") {
+		} else if (isGestureName(attr.name)) {
 			const slot = attr.parts[0];
 			const handler = typeof slot === "number" ? values[slot] : undefined;
-			if (isGetter(handler)) attrs.onClick = () => void handler();
+			if (typeof handler === "function")
+				attrs.gestures.set(attr.name, (event) => void handler(event));
 		} else if (attr.name === "motion" || attr.name === "scroll-y") {
 			const slot = attr.parts[0];
 			const value = typeof slot === "number" ? values[slot] : undefined;
@@ -725,61 +746,49 @@ function bindClass(
 const isFlexContainer = (classes: string) =>
 	/(^|\s)(inline-)?flex(\s|$)/.test(classes);
 
-// ─── Press ───────────────────────────────────────────────────────
+// ─── Gestures ────────────────────────────────────────────────────
 
-type Point = {
-	pageX: number;
-	pageY: number;
-	locationX: number;
-	locationY: number;
-};
-
-function touchPoint(payload: unknown): Point | null {
-	if (typeof payload !== "object" || payload === null) return null;
-	const changed: unknown = Reflect.get(payload, "changedTouches");
-	const touch: unknown = Array.isArray(changed) ? changed[0] : payload;
-	if (typeof touch !== "object" || touch === null) return null;
-	const read = (key: string) => {
-		const v: unknown = Reflect.get(touch, key);
-		return typeof v === "number" ? v : 0;
-	};
-	return {
-		pageX: read("pageX"),
-		pageY: read("pageY"),
-		locationX: read("locationX"),
-		locationY: read("locationY"),
-	};
+function gestureData(payload: unknown): { [key: string]: unknown } {
+	const text: unknown =
+		typeof payload === "object" && payload !== null
+			? Reflect.get(payload, "text")
+			: undefined;
+	if (typeof text !== "string" || text === "") return {};
+	try {
+		const data: unknown = JSON.parse(text);
+		return typeof data === "object" && data !== null && !Array.isArray(data)
+			? Object.fromEntries(Object.entries(data))
+			: {};
+	} catch {
+		return {};
+	}
 }
 
-// A finger that travels further than this is scrolling or swiping, not pressing.
-const PRESS_SLOP = 10;
-// `@click` as a press: it fires on release only if the touch stayed put and was
-// not taken over (a scroll view claiming the gesture sends touchCancel). Press
-// feedback (ripple, highlight) is to come with native gesture recognition.
+/**
+ * `@click`, `@longpress`, `@pan` and `@swipe`, recognized natively: the node
+ * tells orbit-host which it listens to (`gestures`, a set of flags), the host
+ * recognizes them on the UI thread — the press feedback starts there, even
+ * with this thread busy — and delivers the outcome here. A click fires on
+ * release if the finger stayed put and nothing took the touch over (a scroll
+ * view, a long press); a pan reports `phase`, `dx`, `dy`, `vx`, `vy` (dp,
+ * dp/s); a swipe is a pan that ended fast, with its `direction`.
+ */
 function withEvents(node: NativeNode, attrs: Attrs): NativeNode {
-	const { onClick } = attrs;
-	if (!onClick) return node;
-	let origin: Point | null = null;
-	const release = () => {
-		origin = null;
-	};
+	const { gestures } = attrs;
+	if (gestures.size === 0) return node;
+	let flags = 0;
+	const byNative = new Map<string, [string, GestureHandler]>();
+	for (const [name, handler] of gestures) {
+		const gesture = GESTURES[name];
+		flags |= gesture.flag;
+		byNative.set(gesture.native, [gesture.type, handler]);
+	}
+	node.props.gestures = flags;
 	node.onEvent = (type, payload) => {
-		const point = touchPoint(payload);
-		if (type === "topTouchStart" && point) {
-			origin = point;
-		} else if (type === "topTouchMove" && origin && point) {
-			if (
-				Math.hypot(point.pageX - origin.pageX, point.pageY - origin.pageY) >
-				PRESS_SLOP
-			)
-				release();
-		} else if (type === "topTouchEnd") {
-			const pressed = origin !== null;
-			release();
-			if (pressed) onClick();
-		} else if (type === "topTouchCancel") {
-			release();
-		}
+		const entry = byNative.get(type);
+		if (!entry) return;
+		const [eventType, handler] = entry;
+		handler({ ...gestureData(payload), type: eventType });
 	};
 	return node;
 }

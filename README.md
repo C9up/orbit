@@ -43,7 +43,8 @@ mount(Counter({}), { viewport: Dimensions.get("window") });
 | `overflow-hidden` | children clipped to the box (and its rounded corners); otherwise they may overflow, as in CSS |
 | `shadow-*` | a CSS box shadow, drawn by the parent outside the box (Android 8+) |
 | `backdrop-blur-*` | what is behind the view, blurred (Android 12+; the translucent background alone below) |
-| `@click=${fn}` | a press: fires on release if the finger stayed put |
+| `@click=${fn}` | a press, recognized natively: fires on release if the finger stayed put; a ripple shows at once |
+| `@longpress`, `@pan`, `@swipe` | recognized natively too (see Gestures) |
 | `motion=${{ opacity, translateX, translateY, scale }}` | UI-thread animation (`MotionValue`) |
 | `scroll-y=${value}` | the scroll offset feeds a `MotionValue` |
 | `input`, `textarea` | the platform's text field (`EditText`): typing never waits for JS |
@@ -80,7 +81,7 @@ source's own size nor 4096 px a side, and kept decoded in a memory cache
 bounded to an eighth of the app's heap; a download or a file over 64 MB is
 refused. Remote images have no disk cache yet.
 
-Not mapped yet (`E_ORBIT_UNSUPPORTED_ELEMENT`): `select`, `svg`, `canvas`. Press feedback, line height and accessibility are still to come; the Tailwind subset is hand-written until it
+Not mapped yet (`E_ORBIT_UNSUPPORTED_ELEMENT`): `select`, `svg`, `canvas`. Line height and accessibility are still to come; the Tailwind subset is hand-written until it
 is compiled from nebula's theme.
 
 ## Long lists
@@ -99,6 +100,26 @@ while the reader is there: a conversation.
 On the maintainer's phone, a conversation of 10 000 messages of varying
 length mounts in about 70 ms (30 messages: about 40 ms, the same rows built)
 and scrolls without a dropped frame.
+
+## Gestures
+
+orbit-host recognizes gestures on the UI thread (`crates/orbit-host/src/gesture.rs`),
+the way react-native-gesture-handler does for React Native: every touch goes
+to Rust before any view, so the press feedback starts even while the JS
+thread is busy, and JS receives the outcome when it can.
+
+- `@click`: fires on release if the finger stayed within 10 dp and nothing
+  took the touch over. A ripple, masked by the view's rounded box, starts
+  where the finger is — at once, or after 100 ms inside a scroll view so a
+  scroll that starts on a row does not flash it.
+- `@longpress`: after 500 ms held; the release then fires no click.
+- `@pan`: once the finger moves past the slop, `{ phase, dx, dy, vx, vy }`
+  (dp, dp/s) on `start`, each `move`, and `end` or `cancel`.
+- `@swipe`: a pan that ended at 500 dp/s or more, `{ direction, vx, vy }`.
+
+Inside a scroll view a drag along its axis is the scroll view's; across it,
+a pan or a swipe claims the touch and the scroll view gets a cancel. A
+swipe started on a pressable row of a list scrolls it without selecting.
 
 ## Shadows and glass
 

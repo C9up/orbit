@@ -29,4 +29,4 @@ export {
 	type TimingOptions,
 } from "./motion.js";
 export { unknownClasses } from "./tailwind.js";
-export { mount } from "./template.js";
+export { type GestureEvent, mount } from "./template.js";
