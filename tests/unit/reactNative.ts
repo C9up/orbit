@@ -37,6 +37,28 @@ export const Dimensions = {
 	},
 };
 
+/** The phone's light / dark setting; `setScheme` changes it as the user would. */
+let scheme: "light" | "dark" | null = "light";
+const appearanceListeners = new Set<
+	(preferences: { colorScheme: "light" | "dark" | null }) => void
+>();
+
+export const Appearance = {
+	getColorScheme: () => scheme,
+	addChangeListener(
+		listener: (preferences: { colorScheme: "light" | "dark" | null }) => void,
+	) {
+		appearanceListeners.add(listener);
+		return { remove: () => appearanceListeners.delete(listener) };
+	},
+};
+
+export function setScheme(next: "light" | "dark" | null): void {
+	scheme = next;
+	for (const listener of [...appearanceListeners])
+		listener({ colorScheme: next });
+}
+
 export const TurboModuleRegistry = {
 	getEnforcing(name: string): unknown {
 		if (!modules.has(name))

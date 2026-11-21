@@ -25,6 +25,14 @@ declare module "react-native" {
 	export const Dimensions: {
 		get(dimension: "window"): { width: number; height: number };
 	};
+	export const Appearance: {
+		getColorScheme(): "light" | "dark" | null | undefined;
+		addChangeListener(
+			listener: (preferences: {
+				colorScheme: "light" | "dark" | null | undefined;
+			}) => void,
+		): { remove(): void };
+	};
 	export const TurboModuleRegistry: {
 		getEnforcing(name: string): unknown;
 	};

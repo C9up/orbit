@@ -13,15 +13,18 @@
   "exports": {
     ".": {
       "types": "./src/index.ts",
-      "import": "./src/index.ts"
+      "import": "./src/index.ts",
+      "default": "./src/index.ts"
     },
     "./react-native": {
       "types": "./src/react-native/index.ts",
-      "import": "./src/react-native/index.ts"
+      "import": "./src/react-native/index.ts",
+      "default": "./src/react-native/index.ts"
     },
     "./pages": {
       "types": "./src/pages.ts",
-      "import": "./src/pages.ts"
+      "import": "./src/pages.ts",
+      "default": "./src/pages.ts"
     }
   },
   "scripts": {
@@ -88,15 +91,18 @@
     "exports": {
       ".": {
         "types": "./dist/index.d.ts",
-        "import": "./dist/index.js"
+        "import": "./dist/index.js",
+        "default": "./dist/index.js"
       },
       "./react-native": {
         "types": "./dist/react-native/index.d.ts",
-        "import": "./dist/react-native/index.js"
+        "import": "./dist/react-native/index.js",
+        "default": "./dist/react-native/index.js"
       },
       "./pages": {
         "types": "./dist/pages.d.ts",
-        "import": "./dist/pages.js"
+        "import": "./dist/pages.js",
+        "default": "./dist/pages.js"
       }
     },
     "access": "public"

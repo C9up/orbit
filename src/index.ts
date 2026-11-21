@@ -58,5 +58,7 @@ export {
 	useStyles,
 } from "./styles.js";
 export { type GestureEvent, mount } from "./template.js";
+/** A standard UTF-8 `TextDecoder` where the engine has none (Hermes). */
+export { installTextDecoder, StandardTextDecoder } from "./textDecoder.js";
 /** A standard `URL` in place of the platform's, when it is not one (React Native's). */
 export { installStandardUrl, StandardURL } from "./url.js";
