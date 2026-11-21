@@ -1,6 +1,6 @@
 {
   "name": "@c9up/orbit",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Orbit — aurora components as native views on a phone, laid out and diffed by a Rust host",
   "license": "MIT",
   "repository": {
