@@ -33,10 +33,12 @@ export {
 } from "./motion.js";
 /** The app's ream server, one connection for pages, comet and relay. */
 export {
+	type ConnectOptions,
 	connectServer,
 	type ServerConnection,
 	type ServerEvent,
 	ServerEventStream,
+	type TokenStore,
 } from "./server.js";
 export {
 	createStack,

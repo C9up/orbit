@@ -149,6 +149,42 @@ describe("connectServer", () => {
 	});
 });
 
+describe("connectServer's token store", () => {
+	it("keeps the token authorize sets, and restores it at the next launch", async () => {
+		const calls: Array<{ init: RequestInit }> = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init: RequestInit) => {
+				calls.push({ init });
+				return new Response("{}");
+			}),
+		);
+		let kept: string | null = null;
+		const tokenStore = {
+			get: async () => kept,
+			set: async (token: string | null) => {
+				kept = token;
+			},
+		};
+		const first = connectServer(SERVER, { tokenStore });
+		expect(await first.restore()).toBe(false);
+		await first.authorize("jwt-7");
+		expect(kept).toBe("jwt-7");
+
+		// A new launch: a new connection, the token read back.
+		const next = connectServer(SERVER, { tokenStore });
+		expect(await next.restore()).toBe(true);
+		await next.fetch("/me");
+		expect(new Headers(calls.at(-1)?.init.headers).get("authorization")).toBe(
+			"Bearer jwt-7",
+		);
+
+		await next.authorize(null);
+		expect(kept).toBeNull();
+		expect(await connectServer(SERVER).restore()).toBe(false);
+	});
+});
+
 describe("ServerEventStream", () => {
 	it("parses events as EventSource does, across chunks", () => {
 		FakeXhr.all = [];

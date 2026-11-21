@@ -50,9 +50,35 @@ export interface ServerConnection {
 	/**
 	 * Send `Authorization: Bearer <token>` with every request and stream from
 	 * now on (`null` stops): an API's token, which — unlike a browser's
-	 * `EventSource` — the phone can send on server-sent events too.
+	 * `EventSource` — the phone can send on server-sent events too. With a
+	 * `tokenStore`, the token is kept there too (and forgotten on `null`);
+	 * the promise settles once it is.
 	 */
-	authorize(token: string | null): void;
+	authorize(token: string | null): Promise<void>;
+	/**
+	 * Authorize again with the token the `tokenStore` kept, as when the app
+	 * starts: true when there was one. Without a store, false.
+	 */
+	restore(): Promise<boolean>;
+}
+
+/**
+ * Where a connection keeps its API token between launches — on a phone,
+ * `@c9up/orbit-secure-store`'s getItem / setItem / deleteItem under a key:
+ *
+ *     connectServer(origin, { tokenStore: {
+ *       get: () => getItem('session'),
+ *       set: (token) => token === null ? deleteItem('session') : setItem('session', token),
+ *     } })
+ */
+export interface TokenStore {
+	get(): Promise<string | null>;
+	set(token: string | null): Promise<void>;
+}
+
+export interface ConnectOptions {
+	/** Keeps the token `authorize` sets, so `restore` finds it at the next launch. */
+	tokenStore?: TokenStore;
 }
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "10.0.2.2"]);
@@ -67,7 +93,10 @@ function xsrfFrom(response: Response): string | undefined {
 }
 
 /** Connect to the app's ream server: https, or http to this machine or the emulator's host. */
-export function connectServer(server: string): ServerConnection {
+export function connectServer(
+	server: string,
+	options: ConnectOptions = {},
+): ServerConnection {
 	const base = new URL(server);
 	const local = LOCAL_HOSTS.has(base.hostname);
 	if (base.protocol !== "https:" && !(base.protocol === "http:" && local)) {
@@ -141,8 +170,15 @@ export function connectServer(server: string): ServerConnection {
 				...(bearer === null ? {} : { authorization: `Bearer ${bearer}` }),
 			})),
 		xsrf: () => token,
-		authorize: (next) => {
+		authorize: async (next) => {
 			bearer = next;
+			await options.tokenStore?.set(next);
+		},
+		restore: async () => {
+			const kept = await options.tokenStore?.get();
+			if (typeof kept !== "string" || kept === "") return false;
+			bearer = kept;
+			return true;
 		},
 	};
 }

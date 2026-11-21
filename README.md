@@ -218,6 +218,9 @@ session cookie, the `XSRF-TOKEN` echoed on mutations), `json` (comet's
 transport), `stream` (server-sent events over React Native's streaming XHR,
 for `configureRelay({ stream, fetch })`) and `authorize(token)` (a Bearer
 token on every request and stream). Pass it as `serverPages({ server })`.
+With a `tokenStore` (`{ get, set }`, e.g. over `@c9up/orbit-secure-store`),
+`authorize` keeps the token and `restore()` authorizes again at the next
+launch.
 
 ## Long lists
 
