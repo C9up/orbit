@@ -37,7 +37,7 @@ mount(Counter({}), { viewport: Dimensions.get("window") });
 | `p`, `h1`–`h6`, `label` | a text |
 | inline elements (`span`, `strong`, `em`, …) | a run inside the surrounding text |
 | text sitting in a view | wrapped in an anonymous text, as CSS does |
-| `class="…"` | the Tailwind subset in `src/tailwind.ts`; text styles cascade |
+| `class="…"` | the app's own Tailwind build, compiled at build time (see Styles); text styles cascade |
 | a `flex` container | each child its own item; `flex` is a row, as on the web |
 | `overflow-y-auto` | a native scroll view around a content view |
 | `overflow-hidden` | children clipped to the box (and its rounded corners); otherwise they may overflow, as in CSS |
@@ -82,8 +82,43 @@ source's own size nor 4096 px a side, and kept decoded in a memory cache
 bounded to an eighth of the app's heap; a download or a file over 64 MB is
 refused. Remote images have no disk cache yet.
 
-Not mapped yet (`E_ORBIT_UNSUPPORTED_ELEMENT`): `select`, `canvas`. Line height and accessibility are still to come; the Tailwind subset is hand-written until it
-is compiled from nebula's theme.
+Not mapped yet (`E_ORBIT_UNSUPPORTED_ELEMENT`): `select`, `canvas`. Accessibility is still to come.
+
+## Styles
+
+The app's classes are its Tailwind classes, styled by its own Tailwind build.
+`ream android:*` runs Tailwind over the app (its `mobile.css`, as on the web)
+and compiles the output into a style table (`ream css:compile`): every rule
+with its values resolved against the theme — lengths in px, colours light and
+dark — and only what classes compose at run time left open (`--tw-shadow`,
+`--tw-leading`…). `run()` loads it; `useStyles(table)` does by hand.
+
+orbit applies it as a browser applies the stylesheet: rules matched by class,
+cascaded by specificity and order, the base layer's element rules included
+(nebula's `* { border-color }`, `body { background; color }` on the root),
+custom properties resolved, and the result read into the host's style keys.
+Variants are conditions on orbit's own tree, followed when they change:
+
+- an attribute of the element: `data-[state=open]:`, `aria-invalid:`,
+  `disabled:` (aurora's `?disabled`), `[class*=…]`;
+- `dark:` and the theme's dark values, through `colorScheme("dark")`;
+- an ancestor (`group-data-[…]:`), a previous sibling (`peer-checked:`), the
+  element's children and descendants (`*:`, `space-y-*`, `[&_svg]:size-4`);
+- the viewport's width (`sm:`, `md:`).
+
+What a touch screen never is (`hover:` sits behind `@media (hover:hover)`),
+what orbit does not see yet (`:has()`, `:first-child`, `::after`) and what it
+does not draw (transitions, transforms, gradients, `grid` — laid out as a
+column) leave the class known and inert. A class the stylesheet does not have
+lands in `unknownClasses`.
+
+Text gets its line height (`leading-*`, and a size's own): every line exactly
+that tall, the glyphs centred, as CSS's line box; weights are exact
+(`font-medium` is 500).
+
+On the maintainer's phone nebula's Button, Card and a list of Items render as
+Chromium does with the same stylesheet and font: across the screen's 55 boxes,
+heights and positions agree within 0.9 dp (a physical pixel is 0.36 dp there).
 
 ## Vector drawings
 

@@ -1,7 +1,9 @@
 package com.c9up.orbit
 
 import android.content.Context
+import android.os.Build
 import android.graphics.Canvas
+import android.graphics.Paint
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.text.Layout
@@ -11,7 +13,9 @@ import android.text.StaticLayout
 import android.text.TextPaint
 import android.text.style.AbsoluteSizeSpan
 import android.text.style.ForegroundColorSpan
+import android.text.style.LineHeightSpan
 import android.text.style.StyleSpan
+import android.text.style.TypefaceSpan
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -249,6 +253,22 @@ class OrbitRoot(context: Context) : OrbitBox(context) {
   }
 }
 
+/**
+ * CSS's line box: every line exactly `height` px tall, the glyphs centred in
+ * it — the leading split half above, half below — so a text is as tall as on
+ * the web, whatever the font's own metrics.
+ */
+private class CssLineHeight(private val height: Int) : LineHeightSpan {
+  override fun chooseHeight(text: CharSequence, start: Int, end: Int, spanstartv: Int, lineHeight: Int, fm: Paint.FontMetricsInt) {
+    val extra = height - (fm.descent - fm.ascent)
+    val above = extra / 2
+    fm.ascent -= above
+    fm.descent += extra - above
+    fm.top = fm.ascent
+    fm.bottom = fm.descent
+  }
+}
+
 /** Attributed text decoded from orbit-host's encoding; measured and drawn alike. */
 class OrbitText(val text: CharSequence, private val align: Layout.Alignment, private val paint: TextPaint) {
   fun layout(widthPx: Int): StaticLayout =
@@ -273,7 +293,7 @@ class OrbitText(val text: CharSequence, private val align: Layout.Alignment, pri
         2 -> Layout.Alignment.ALIGN_OPPOSITE
         else -> Layout.Alignment.ALIGN_NORMAL
       }
-      buf.float // line height: not applied yet
+      val lineHeight = buf.float
       val runs = buf.int
       val out = SpannableStringBuilder()
       val paint = TextPaint(TextPaint.ANTI_ALIAS_FLAG)
@@ -290,8 +310,20 @@ class OrbitText(val text: CharSequence, private val align: Layout.Alignment, pri
         }
         out.setSpan(AbsoluteSizeSpan((size * density).toInt()), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         out.setSpan(ForegroundColorSpan(color), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-        val style = (if (flags and 1 != 0) Typeface.BOLD else 0) or (if (flags and 2 != 0) Typeface.ITALIC else 0)
-        if (style != 0) out.setSpan(StyleSpan(style), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        val italic = flags and 2 != 0
+        val weight = flags shr 4
+        if (Build.VERSION.SDK_INT >= 28 && weight > 0) {
+          // The exact weight (font-medium is 500), as the web draws it.
+          if (weight != 400 || italic) {
+            out.setSpan(TypefaceSpan(Typeface.create(Typeface.DEFAULT, weight, italic)), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+          }
+        } else {
+          val style = (if (flags and 1 != 0) Typeface.BOLD else 0) or (if (italic) Typeface.ITALIC else 0)
+          if (style != 0) out.setSpan(StyleSpan(style), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+      }
+      if (lineHeight > 0f && out.isNotEmpty()) {
+        out.setSpan(CssLineHeight(Math.round(lineHeight * density)), 0, out.length, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
       }
       return OrbitText(out, align, paint)
     }

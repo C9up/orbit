@@ -40,5 +40,10 @@ export {
 	type StackOptions,
 	useScreen,
 } from "./stack.js";
-export { unknownClasses } from "./tailwind.js";
+export {
+	colorScheme,
+	type StyleTable,
+	unknownClasses,
+	useStyles,
+} from "./styles.js";
 export { type GestureEvent, mount } from "./template.js";

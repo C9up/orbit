@@ -50,7 +50,7 @@ describe("mount", () => {
 		const [textTag, text] = first(host.all("RCTText"));
 		expect(text.props).toMatchObject({
 			fontSize: 14,
-			color: colorToArgb("#64748b"),
+			color: colorToArgb("#62748e"),
 		});
 		expect(host.text(textTag)).toBe("Il reste 2");
 		const [, strong] = first(host.all("RCTVirtualText"));

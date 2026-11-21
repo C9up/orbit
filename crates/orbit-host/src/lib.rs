@@ -88,7 +88,8 @@ impl Kind {
 struct TextStyle {
     color: Option<i32>,
     size: Option<f32>,
-    bold: Option<bool>,
+    /// The CSS font weight, 100..=900.
+    weight: Option<u16>,
     italic: Option<bool>,
     line_height: Option<f32>,
     align: Option<u8>,
@@ -99,7 +100,7 @@ impl TextStyle {
         TextStyle {
             color: self.color.or(base.color),
             size: self.size.or(base.size),
-            bold: self.bold.or(base.bold),
+            weight: self.weight.or(base.weight),
             italic: self.italic.or(base.italic),
             line_height: self.line_height.or(base.line_height),
             align: self.align.or(base.align),
@@ -436,10 +437,12 @@ fn text_style_of(props: &Map<String, Value>) -> TextStyle {
     TextStyle {
         color: props.get("color").and_then(color),
         size: props.get("fontSize").and_then(num),
-        bold: props.get("fontWeight").map(|w| match w {
-            Value::String(s) => s == "bold" || s.parse::<u32>().map(|n| n >= 600).unwrap_or(false),
-            Value::Number(n) => n.as_f64().map(|n| n >= 600.0).unwrap_or(false),
-            _ => false,
+        weight: props.get("fontWeight").and_then(|w| match w {
+            Value::String(s) if s == "bold" => Some(700),
+            Value::String(s) if s == "normal" => Some(400),
+            Value::String(s) => s.parse::<u16>().ok(),
+            Value::Number(n) => n.as_u64().map(|n| n as u16),
+            _ => None,
         }),
         italic: props
             .get("fontStyle")
@@ -458,6 +461,12 @@ fn text_style_of(props: &Map<String, Value>) -> TextStyle {
 }
 
 // ---------------------------------------------------------------- encoding
+
+/// A run's flags: bit 0 bold (600 and up), bit 1 italic, bits 4.. the weight.
+fn run_flags(style: &TextStyle) -> i32 {
+    let weight = i32::from(style.weight.unwrap_or(400).clamp(1, 1000));
+    i32::from(weight >= 600) | (i32::from(style.italic.unwrap_or(false)) << 1) | (weight << 4)
+}
 
 fn put_i32(out: &mut Vec<u8>, v: i32) {
     out.extend_from_slice(&v.to_le_bytes());
@@ -494,8 +503,7 @@ fn encode_input_sample(props: &Map<String, Value>) -> Vec<u8> {
     put_i32(&mut out, 1);
     put_i32(&mut out, style.color.unwrap_or(0xFF00_0000u32 as i32));
     put_f32(&mut out, style.size.unwrap_or(14.0));
-    let flags =
-        i32::from(style.bold.unwrap_or(false)) | (i32::from(style.italic.unwrap_or(false)) << 1);
+    let flags = run_flags(&style);
     put_i32(&mut out, flags);
     put_i32(&mut out, sample.len() as i32);
     out.extend_from_slice(sample.as_bytes());
@@ -581,8 +589,7 @@ impl Host {
         for (style, text) in runs {
             put_i32(&mut out, style.color.unwrap_or(0xFF00_0000u32 as i32));
             put_f32(&mut out, style.size.unwrap_or(14.0));
-            let flags = i32::from(style.bold.unwrap_or(false))
-                | (i32::from(style.italic.unwrap_or(false)) << 1);
+            let flags = run_flags(&style);
             put_i32(&mut out, flags);
             put_i32(&mut out, text.len() as i32);
             out.extend_from_slice(text.as_bytes());

@@ -37,10 +37,12 @@ describe("text fields", () => {
 			secure: false,
 			editable: true,
 			padding: 12,
-			borderRadius: 8,
+			// Tailwind v4's slate-800, and the theme's --radius (0.625rem).
+			borderRadius: 10,
 			fontSize: 16,
-			color: colorToArgb("#1e293b"),
-			placeholderColor: colorToArgb("#94a3b8"),
+			color: colorToArgb("#1d293d"),
+			// Tailwind's preflight: the text colour at half strength.
+			placeholderColor: colorToArgb("rgba(29, 41, 61, 0.5)"),
 			text: "",
 		});
 	});

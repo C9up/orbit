@@ -55,12 +55,18 @@ import {
 	type Child,
 	flatten,
 	NativeNode,
+	type Props,
 	Region,
 	rawText,
 	type Style,
 } from "./node.js";
 import { Stack } from "./stack.js";
-import { isScrollContainer, splitScroll, tw } from "./tailwind.js";
+import {
+	type Computed,
+	computeStyle,
+	type StyledElement,
+	viewportSize,
+} from "./styles.js";
 
 type Part = string | number; // number = index into the template's values
 type TAttr = { name: string; parts: Part[] };
@@ -681,6 +687,8 @@ type Attrs = {
 	gestures: Map<GestureName, GestureHandler>;
 	motion: MotionStyle | null;
 	scrollY: MotionValue | null;
+	/** The others (`data-*`, `aria-*`, `disabled`…), as written: what styles may test. */
+	attributes: Map<string, unknown>;
 };
 
 function readAttrs(el: TElement, values: readonly unknown[]): Attrs {
@@ -689,6 +697,7 @@ function readAttrs(el: TElement, values: readonly unknown[]): Attrs {
 		gestures: new Map(),
 		motion: null,
 		scrollY: null,
+		attributes: new Map(),
 	};
 	for (const attr of el.attrs) {
 		if (attr.name === "class") {
@@ -719,41 +728,128 @@ function readAttrs(el: TElement, values: readonly unknown[]): Attrs {
 					"E_ORBIT_INVALID_SCROLL_BINDING",
 					"[orbit] scroll-y expects a motion value",
 				);
+		} else if (attr.name.startsWith("?")) {
+			// aurora's boolean attribute: present while its value is truthy.
+			attrs.attributes.set(attr.name.slice(1), attrValue(attr, values));
+		} else if (!attr.name.startsWith("@") && !attr.name.startsWith(".")) {
+			// data-*, aria-*, disabled, role…: what the style table's variants test.
+			attrs.attributes.set(attr.name, attrValue(attr, values));
 		}
-		// Other attributes (id, aria-*, data-*) have no native meaning yet (accessibility: later).
 	}
 	return attrs;
 }
 
-function bindClass(
-	node: NativeNode,
-	attrs: Attrs,
-	base: Style,
-	pick: (s: ReturnType<typeof tw>) => Style,
-): Style {
+// ─── Styles ──────────────────────────────────────────────────────
+
+/** Where an element is built: what it inherits, and who is around it. */
+interface Ctx {
+	/** The text style it inherits (reactive: a parent's state may change it). */
+	text: () => Style;
+	parent: StyledElement | null;
+	/** The parent lays its children out as flex items: they shrink, as in CSS. */
+	flexParent: boolean;
+	/** The element built just before in the same parent (`peer-*`). */
+	siblings: { last: StyledElement | null };
+}
+
+/** An attribute's value for a style condition: null when absent. */
+function attributeOf(attrs: Attrs, name: string): string | null {
+	const raw = attrs.attributes.get(name);
+	const v = isGetter(raw) ? raw() : raw;
+	if (v === null || v === undefined || v === false) return null;
+	return v === true ? "" : str(v);
+}
+
+const splitClasses = (classes: string) => classes.split(/\s+/).filter(Boolean);
+
+interface Styled {
+	el: StyledElement;
+	computed: () => Computed;
+}
+
+/** An element as the style table sees it, and its computed style (reactive). */
+function styled(tag: string, attrs: Attrs, ctx: Ctx, root = false): Styled {
 	const { className } = attrs;
-	if (typeof className === "string") return { ...base, ...pick(tw(className)) };
-	let previous: Style = {};
+	let classes: () => readonly string[];
+	if (typeof className === "string") {
+		const list = splitClasses(className);
+		classes = () => list;
+	} else {
+		classes = memo(() => splitClasses(className()));
+	}
+	const holder: { computed: (() => Computed) | null } = { computed: null };
+	const el: StyledElement = {
+		tag,
+		root,
+		classes,
+		attribute: (name) => attributeOf(attrs, name),
+		parent: ctx.parent,
+		previous: ctx.siblings.last,
+		get vars() {
+			return holder.computed?.().vars;
+		},
+	};
+	ctx.siblings.last = el;
+	const computed = memo(() => computeStyle(el, ctx.text()));
+	holder.computed = computed;
+	return { el, computed };
+}
+
+/** A view's box: its computed box, and CSS's flex-shrink in a flex container. */
+function boxOf(c: Computed, ctx: Ctx): Style {
+	return ctx.flexParent && c.box.flexShrink === undefined
+		? { flexShrink: 1, ...c.box }
+		: c.box;
+}
+
+/** Text props: a unitless line height (`1.5x`) becomes px against the font size. */
+function textProps(style: Style): Style {
+	const lh = style.lineHeight;
+	if (typeof lh !== "string" || !lh.endsWith("x")) return style;
+	const size = typeof style.fontSize === "number" ? style.fontSize : 16;
+	return { ...style, lineHeight: Number(lh.slice(0, -1)) * size };
+}
+
+/** The children's context: what this element hands down. */
+function childCtx(s: Styled, ctx: Ctx, own: Style = {}): Ctx {
+	return {
+		text: memo(() => ({ ...ctx.text(), ...own, ...s.computed().text })),
+		parent: s.el,
+		flexParent: untrack(s.computed).flex,
+		siblings: { last: null },
+	};
+}
+
+/** Keep `node`'s style props equal to `compute()`, patching what changed; returns the first. */
+function bindStyle(node: NativeNode, compute: () => Style): Style {
+	let previous: Props = {};
 	let initial: Style = {};
 	let first = true;
 	effect(() => {
-		const next = { ...base, ...pick(tw(className())) };
+		const next = compute();
+		const flat = flatten(next);
 		if (first) {
 			initial = next;
 			first = false;
 		} else {
-			const patch = flatten(next);
+			const patch: Props = {};
+			for (const [key, value] of Object.entries(flat))
+				if (previous[key] !== value) patch[key] = value;
 			for (const key of Object.keys(previous))
-				if (!(key in next)) patch[key] = null;
-			node.setProps(patch);
+				if (!(key in flat)) patch[key] = null;
+			if (Object.keys(patch).length > 0) node.setProps(patch);
 		}
-		previous = next;
+		previous = flat;
 	});
 	return initial;
 }
 
-const isFlexContainer = (classes: string) =>
-	/(^|\s)(inline-)?flex(\s|$)/.test(classes);
+/** A text node holding a run, styled by what it inherits. */
+function textRun(ctx: Ctx, run: Child[]): NativeNode {
+	const node = new NativeNode("RCTText", {}, run);
+	node.props = flatten(bindStyle(node, () => textProps(ctx.text())));
+	return node;
+}
 
 // ─── Gestures ────────────────────────────────────────────────────
 
@@ -813,27 +909,57 @@ function withMotion(node: NativeNode, attrs: Attrs): NativeNode {
 function scrollElement(
 	el: TElement,
 	values: readonly unknown[],
-	inherited: Style,
+	ctx: Ctx,
 	attrs: Attrs,
-	classes: string,
+	s: Styled,
 ): NativeNode {
-	const split = tw(classes);
-	const { outer, content } = splitScroll(split.box);
+	const split = (c: Computed) => {
+		const outer: Style = {};
+		const content: Style = {};
+		for (const [key, value] of Object.entries(boxOf(c, ctx)))
+			(CONTENT_KEYS.has(key) ? content : outer)[key] = value;
+		if (c.flex && content.flexDirection === undefined)
+			content.flexDirection = "row";
+		return { outer, content };
+	};
 	const container = new NativeNode(
 		"RCTView",
-		flatten(content),
+		{},
 		viewChildren(
 			el.children,
 			values,
-			{ ...inherited, ...split.text },
-			isFlexContainer(classes),
+			childCtx(s, ctx),
+			untrack(s.computed).flex,
 		),
 	);
-	const node = new NativeNode("RCTScrollView", flatten(outer), [container]);
+	container.props = flatten(
+		bindStyle(container, () => split(s.computed()).content),
+	);
+	const node = new NativeNode("RCTScrollView", {}, [container]);
+	node.props = flatten(bindStyle(node, () => split(s.computed()).outer));
 	const { scrollY } = attrs;
 	if (scrollY) afterCommit(() => bindScrollY(node.tag, scrollY));
 	return withMotion(node, attrs);
 }
+
+// On the web a scrolling element's padding, gap and flow lay out its content;
+// on native those belong to the scroll view's content container.
+const CONTENT_KEYS = new Set([
+	"padding",
+	"paddingHorizontal",
+	"paddingVertical",
+	"paddingTop",
+	"paddingBottom",
+	"paddingLeft",
+	"paddingRight",
+	"gap",
+	"rowGap",
+	"columnGap",
+	"flexDirection",
+	"flexWrap",
+	"alignItems",
+	"justifyContent",
+]);
 
 // ─── Text fields ─────────────────────────────────────────────────
 
@@ -878,8 +1004,9 @@ function call(handler: unknown, event: unknown): void {
 function inputElement(
 	el: TElement,
 	values: readonly unknown[],
-	inherited: Style,
+	ctx: Ctx,
 	attrs: Attrs,
+	s: Styled,
 ): NativeNode {
 	const raw = new Map<string, unknown>();
 	for (const attr of el.attrs) raw.set(attr.name, attrValue(attr, values));
@@ -889,15 +1016,20 @@ function inputElement(
 	const maxLength = Number(str(raw.get("maxlength")));
 	const inputmode = str(raw.get("inputmode")).toLowerCase();
 	const node = new NativeNode("OrbitTextInput", {}, []);
-	const style = bindClass(node, attrs, { ...inherited }, (s) => ({
-		...s.text,
-		...s.box,
-	}));
+	const style = bindStyle(node, () => {
+		const c = s.computed();
+		return textProps({
+			placeholderColor: c.placeholder ?? PLACEHOLDER,
+			...ctx.text(),
+			...c.text,
+			...boxOf(c, ctx),
+		});
+	});
 	const bound = raw.get(".value") ?? raw.get("value");
 	let lastNative = isGetter(bound) ? str(untrack(bound)) : str(bound);
 	let version = 0;
 	node.props = {
-		...flatten({ placeholderColor: PLACEHOLDER, ...style }),
+		...flatten(style),
 		placeholder: str(raw.get("placeholder")),
 		multiline,
 		rows:
@@ -1023,11 +1155,13 @@ function imgElement(
 	el: TElement,
 	values: readonly unknown[],
 	attrs: Attrs,
+	s: Styled,
+	ctx: Ctx,
 ): NativeNode {
 	const raw = new Map<string, unknown>();
 	for (const attr of el.attrs) raw.set(attr.name, attrValue(attr, values));
 	const node = new NativeNode("OrbitImage", {}, []);
-	const style = bindClass(node, attrs, {}, (s) => s.box);
+	const style = bindStyle(node, () => boxOf(s.computed(), ctx));
 	const src = raw.get("src");
 	const initial = isGetter(src) ? untrack(src) : src;
 	node.props = {
@@ -1170,11 +1304,12 @@ function svgLength(el: TElement, name: string, values: readonly unknown[]) {
 function svgElement(
 	el: TElement,
 	values: readonly unknown[],
-	inherited: Style,
+	ctx: Ctx,
 	attrs: Attrs,
+	s: Styled,
 ): NativeNode {
 	const node = new NativeNode("OrbitVector", {}, []);
-	const box = bindClass(node, attrs, {}, (s) => s.box);
+	const box = bindStyle(node, () => boxOf(s.computed(), ctx));
 	const sized: Style = {};
 	const width = svgLength(el, "width", values);
 	const height = svgLength(el, "height", values);
@@ -1198,11 +1333,8 @@ function svgElement(
 	) {
 		sized.aspectRatio = vw / vh;
 	}
-	const { className } = attrs;
 	const color = (): string => {
-		const classes = typeof className === "string" ? className : className();
-		const own = tw(classes).text.color;
-		const value = own ?? inherited.color ?? "#000000";
+		const value = s.computed().text.color ?? ctx.text().color ?? "#000000";
 		return typeof value === "string" ? value : "#000000";
 	};
 	const describe = () => ({
@@ -1227,7 +1359,7 @@ function svgElement(
 function element(
 	el: TElement,
 	values: readonly unknown[],
-	inherited: Style,
+	ctx: Ctx,
 ): NativeNode {
 	if (UNSUPPORTED.has(el.tag)) {
 		throw new OrbitError(
@@ -1236,49 +1368,49 @@ function element(
 		);
 	}
 	const attrs = readAttrs(el, values);
+	const s = styled(el.tag, attrs, ctx);
 	if (el.tag === "input" || el.tag === "textarea") {
-		return inputElement(el, values, inherited, attrs);
+		return inputElement(el, values, ctx, attrs, s);
 	}
-	if (el.tag === "img") return imgElement(el, values, attrs);
-	if (el.tag === "svg") return svgElement(el, values, inherited, attrs);
+	if (el.tag === "img") return imgElement(el, values, attrs, s, ctx);
+	if (el.tag === "svg") return svgElement(el, values, ctx, attrs, s);
 	const own = TAG_TEXT[el.tag] ?? {};
 	if (TEXT_BLOCK.has(el.tag) || INLINE.has(el.tag)) {
 		const node = new NativeNode(
 			"RCTText",
 			{},
-			textChildren(el.children, values),
+			textChildren(el.children, values, childCtx(s, ctx, own)),
 		);
-		const style = bindClass(node, attrs, { ...inherited, ...own }, (s) => ({
-			...s.text,
-			...s.box,
-		}));
-		node.props = flatten(style);
+		node.props = flatten(
+			bindStyle(node, () => {
+				const c = s.computed();
+				return textProps({
+					...ctx.text(),
+					...own,
+					...c.text,
+					...boxOf(c, ctx),
+				});
+			}),
+		);
 		return withEvents(node, attrs);
 	}
-	// The class is read once for inheritance; a reactive class still restyles the box.
-	const classes =
-		typeof attrs.className === "string"
-			? attrs.className
-			: untrack(attrs.className);
-	if (isScrollContainer(classes))
-		return scrollElement(el, values, { ...inherited, ...own }, attrs, classes);
-	const initial = tw(classes);
-	const flexItems = isFlexContainer(classes);
+	// What the element is (a scroll view, a flex container) is read once.
+	const first = untrack(s.computed);
+	if (first.scroll) return scrollElement(el, values, ctx, attrs, s);
 	const node = new NativeNode(
 		"RCTView",
 		{},
-		viewChildren(
-			el.children,
-			values,
-			{ ...inherited, ...own, ...initial.text },
-			flexItems,
-		),
+		viewChildren(el.children, values, childCtx(s, ctx, own), first.flex),
 	);
-	node.props = flatten(bindClass(node, attrs, {}, (s) => s.box));
+	node.props = flatten(bindStyle(node, () => boxOf(s.computed(), ctx)));
 	return withMotion(withEvents(node, attrs), attrs);
 }
 
-function virtualText(el: TElement, values: readonly unknown[]): NativeNode {
+function virtualText(
+	el: TElement,
+	values: readonly unknown[],
+	ctx: Ctx,
+): NativeNode {
 	if (!INLINE.has(el.tag) && !TEXT_BLOCK.has(el.tag)) {
 		throw new OrbitError(
 			"E_ORBIT_BLOCK_IN_TEXT",
@@ -1286,45 +1418,61 @@ function virtualText(el: TElement, values: readonly unknown[]): NativeNode {
 		);
 	}
 	const attrs = readAttrs(el, values);
+	const s = styled(el.tag, attrs, ctx);
+	const own = TAG_TEXT[el.tag] ?? {};
 	const node = new NativeNode(
 		"RCTVirtualText",
 		{},
-		textChildren(el.children, values),
+		textChildren(el.children, values, childCtx(s, ctx, own)),
 	);
+	// Only its own style: the host cascades the rest from the text around it.
 	node.props = flatten(
-		bindClass(node, attrs, TAG_TEXT[el.tag] ?? {}, (s) => ({
-			...s.text,
-			...s.box,
-		})),
+		bindStyle(node, () => {
+			const c = s.computed();
+			const mine = { ...own, ...c.text, ...c.box };
+			const size = mine.fontSize ?? ctx.text().fontSize;
+			const lh = textProps({
+				fontSize: size ?? 16,
+				lineHeight: mine.lineHeight ?? "",
+			});
+			return mine.lineHeight === undefined
+				? mine
+				: { ...mine, lineHeight: lh.lineHeight ?? "" };
+		}),
 	);
 	return withEvents(node, attrs);
 }
 
 // Children inside an RCTText: raw strings and nested virtual texts only.
-function textChildren(nodes: TNode[], values: readonly unknown[]): Child[] {
+function textChildren(
+	nodes: TNode[],
+	values: readonly unknown[],
+	ctx: Ctx,
+): Child[] {
 	const out: Child[] = [];
 	for (const n of nodes) {
 		if (n.kind === "el") {
-			out.push(virtualText(n, values));
+			out.push(virtualText(n, values, ctx));
 			continue;
 		}
 		for (const part of n.parts) {
 			if (typeof part === "string") out.push(rawText(part));
-			else out.push(...textValue(values[part]));
+			else out.push(...textValue(values[part], ctx));
 		}
 	}
 	return out;
 }
 
-function textValue(v: unknown): Child[] {
+function textValue(v: unknown, ctx: Ctx): Child[] {
 	const list = readEach(v);
-	if (list) return [keyedRegion(list, textValue)];
-	if (isGetter(v)) return [reactiveSlot(v, textValue).child];
+	const again = (value: unknown) => textValue(value, ctx);
+	if (list) return [keyedRegion(list, again)];
+	if (isGetter(v)) return [reactiveSlot(v, again).child];
 	if (isTemplateResult(v)) {
 		ownLifecycle(v);
-		return textChildren(parse(v.strings), slotValues(v));
+		return textChildren(parse(v.strings), slotValues(v), ctx);
 	}
-	if (Array.isArray(v)) return v.flatMap(textValue);
+	if (Array.isArray(v)) return v.flatMap(again);
 	return isPrimitive(v) && str(v) ? [rawText(str(v))] : [];
 }
 
@@ -1334,24 +1482,31 @@ function textValue(v: unknown): Child[] {
 function viewChildren(
 	nodes: TNode[],
 	values: readonly unknown[],
-	inherited: Style,
+	ctx: Ctx,
 	flexItems = false,
 ): Child[] {
 	const out: Child[] = [];
 	let run: Child[] = [];
 	const flushRun = () => {
-		if (run.length > 0)
-			out.push(new NativeNode("RCTText", flatten(inherited), run));
+		// A run of nothing but white space makes no box, as in CSS: the
+		// spaces between `${…}` in a template are not flex items.
+		const blank = run.every(
+			(c) =>
+				c instanceof NativeNode &&
+				c.viewName === "RCTRawText" &&
+				!/\S/.test(str(c.props.text)),
+		);
+		if (run.length > 0 && !blank) out.push(textRun(ctx, run));
 		run = [];
 	};
 	for (const n of nodes) {
 		if (flexItems) flushRun();
 		if (n.kind === "el") {
 			if (INLINE.has(n.tag) && !flexItems) {
-				run.push(virtualText(n, values));
+				run.push(virtualText(n, values, ctx));
 			} else {
 				flushRun();
-				out.push(element(n, values, inherited));
+				out.push(element(n, values, ctx));
 			}
 			continue;
 		}
@@ -1362,9 +1517,9 @@ function viewChildren(
 			}
 			const v = values[part];
 			if (isPrimitive(v)) {
-				run.push(...textValue(v));
+				run.push(...textValue(v, ctx));
 			} else if (isGetter(v) && !readEach(v)) {
-				const slot = reactiveSlot(v, (value) => viewValue(value, inherited));
+				const slot = reactiveSlot(v, (value) => viewValue(value, ctx));
 				if (slot.text) {
 					run.push(slot.child);
 				} else {
@@ -1373,7 +1528,7 @@ function viewChildren(
 				}
 			} else {
 				flushRun();
-				out.push(...viewValue(v, inherited));
+				out.push(...viewValue(v, ctx));
 			}
 		}
 	}
@@ -1381,27 +1536,26 @@ function viewChildren(
 	return out;
 }
 
-function viewValue(v: unknown, inherited: Style): Child[] {
+function viewValue(v: unknown, ctx: Ctx): Child[] {
 	if (v instanceof Stack) {
 		return [
 			v.attach(
-				(result) => scoped(() => viewValue(result, inherited)),
+				(result) => scoped(() => viewValue(result, ctx)),
 				(end) => collecting?.push(end),
 			),
 		];
 	}
 	const list = readEach(v);
-	if (list) return [keyedRegion(list, (row) => viewValue(row, inherited))];
-	if (isGetter(v)) return [region(v, (value) => viewValue(value, inherited))];
+	const again = (value: unknown) => viewValue(value, ctx);
+	if (list) return [keyedRegion(list, again)];
+	if (isGetter(v)) return [region(v, again)];
 	if (isTemplateResult(v)) {
 		ownLifecycle(v);
-		return viewChildren(parse(v.strings), slotValues(v), inherited);
+		return viewChildren(parse(v.strings), slotValues(v), ctx, ctx.flexParent);
 	}
-	if (Array.isArray(v)) return v.flatMap((item) => viewValue(item, inherited));
+	if (Array.isArray(v)) return v.flatMap(again);
 	const text = str(v);
-	return text
-		? [new NativeNode("RCTText", flatten(inherited), [rawText(text)])]
-		: [];
+	return text ? [textRun(ctx, [rawText(text)])] : [];
 }
 
 /**
@@ -1413,8 +1567,9 @@ function slotValues(result: TemplateResult): unknown[] {
 	return result.values.map((value) => bindTemplateContext(result, value));
 }
 
-// Browser defaults for the root text context (16px, black).
-const ROOT_TEXT: Style = { fontSize: 16, color: "#000000" };
+// The root text: a browser's 16px black, and Tailwind's preflight line height
+// (`html { line-height: 1.5 }`), a multiple each text applies to its own size.
+const ROOT_TEXT: Style = { fontSize: 16, color: "#000000", lineHeight: "1.5x" };
 
 /**
  * Render an aurora template as native views through the Rust host. Returns
@@ -1422,10 +1577,34 @@ const ROOT_TEXT: Style = { fontSize: 16, color: "#000000" };
  * `flush()` commits synchronously.
  */
 export function mount(result: TemplateResult, options: MountOptions): Root {
+	viewportSize(options.viewport);
+	const top: Ctx = {
+		text: () => ROOT_TEXT,
+		parent: null,
+		flexParent: false,
+		siblings: { last: null },
+	};
+	// The root is the page's html and body: the base layer's `body { … }`
+	// (nebula's background and text colour) styles it.
+	const body = styled(
+		"body",
+		{
+			className: "",
+			gestures: new Map(),
+			motion: null,
+			scrollY: null,
+			attributes: new Map(),
+		},
+		top,
+		true,
+	);
 	const tree = new NativeNode(
 		"RCTView",
-		flatten({ flex: 1 }),
-		viewValue(result, ROOT_TEXT),
+		{},
+		viewValue(result, childCtx(body, top)),
+	);
+	tree.props = flatten(
+		bindStyle(tree, () => ({ flex: 1, ...boxOf(body.computed(), top) })),
 	);
 	return mountTree(tree, options);
 }

@@ -1,14 +1,15 @@
 import { html, signal } from "@c9up/aurora/core";
 import { describe, expect, it } from "vitest";
 import {
+	colorScheme,
 	colorToArgb,
 	MotionValue,
 	mount,
 	OrbitError,
 	unknownClasses,
 	useHost,
+	useStyles,
 } from "../../src/index.js";
-import { tw } from "../../src/tailwind.js";
 import { FakeHost } from "./fakeHost.js";
 
 const viewport = { width: 400, height: 800 };
@@ -29,62 +30,258 @@ function codeOf(fn: () => unknown): string {
 	return "none";
 }
 
-describe("tailwind subset", () => {
-	it("splits box and text props, with the utilities orbit reads", () => {
-		const s = tw(
-			"p-4 px-2 mt-1 gap-3 w-16 h-2 rounded-lg font-semibold text-xl text-white bg-violet-500 border border-white/30 items-center justify-between self-start",
+/** The props of the first host node of `viewName` whose props match `where`. */
+function propsOf(
+	host: FakeHost,
+	viewName: string,
+	where: (props: Record<string, unknown>) => boolean = () => true,
+): Record<string, unknown> {
+	const found = host.all(viewName).find(([, n]) => where(n.props));
+	if (!found) throw new Error(`no ${viewName}`);
+	return found[1].props;
+}
+
+describe("the app's style table", () => {
+	it("reads box and text styles from the app's Tailwind build", () => {
+		const host = setup();
+		mount(
+			html`<div class="p-4 px-2 mt-1 gap-3 w-16 h-2 rounded-lg font-semibold text-xl text-white bg-violet-500 border border-white/30 items-center justify-between self-start"><p>x</p></div>`,
+			{ viewport },
 		);
-		expect(s.box).toMatchObject({
-			padding: 16,
+		expect(propsOf(host, "RCTView", (p) => p.width === 64)).toMatchObject({
+			paddingVertical: 16,
 			paddingHorizontal: 8,
 			marginTop: 4,
 			gap: 12,
 			width: 64,
 			height: 8,
-			borderRadius: 8,
-			backgroundColor: "#8b5cf6",
+			borderRadius: 10,
+			backgroundColor: colorToArgb("#8e51ff"),
 			borderWidth: 1,
-			borderColor: "rgba(255, 255, 255, 0.3)",
+			borderColor: colorToArgb("rgba(255, 255, 255, 0.302)"),
 			alignItems: "center",
 			justifyContent: "space-between",
 			alignSelf: "flex-start",
 		});
-		expect(s.text).toEqual({
+		// Text styles are inherited by the text inside, as CSS does.
+		expect(propsOf(host, "RCTText")).toMatchObject({
 			fontWeight: "600",
 			fontSize: 20,
-			color: "#ffffff",
+			color: colorToArgb("#ffffff"),
 		});
 	});
 
 	it("reads shadows, backdrop blur, positions and translucent colours", () => {
-		expect(tw("shadow-lg").box).toEqual({
+		const host = setup();
+		mount(
+			html`<div><div class="shadow-lg backdrop-blur-xl absolute top-0 left-4 inset-x-0 bg-slate-900/40"><p class="text-white/80">x</p></div></div>`,
+			{ viewport },
+		);
+		const box = propsOf(host, "RCTView", (p) => p.position === "absolute");
+		expect(box).toMatchObject({
+			shadowX: 0,
 			shadowY: 10,
 			shadowBlur: 15,
 			shadowSpread: -3,
-			shadowColor: "rgba(0, 0, 0, 0.1)",
+			shadowColor: colorToArgb("rgba(0, 0, 0, 0.102)"),
+			backdropBlur: 24,
+			top: 0,
+			// left-4 comes after inset-x-0 in Tailwind's output: it wins, as in a browser.
+			left: 16,
+			right: 0,
+			backgroundColor: colorToArgb("rgba(15, 23, 43, 0.4)"),
 		});
-		expect(tw("shadow").box).toMatchObject({ shadowBlur: 3 });
-		expect(tw("backdrop-blur-xl").box).toEqual({ backdropBlur: 24 });
-		expect(tw("backdrop-blur").box).toEqual({ backdropBlur: 8 });
-		expect(tw("absolute top-0 left-4 inset-x-0").box).toMatchObject({
+		expect(propsOf(host, "RCTText").color).toBe(
+			colorToArgb("rgba(255, 255, 255, 0.8)"),
+		);
+	});
+
+	it("collects the classes the stylesheet does not have", () => {
+		setup();
+		mount(html`<div class="p-2 bg-nope-500 not-a-class"></div>`, { viewport });
+		expect(unknownClasses.has("bg-nope-500")).toBe(true);
+		expect(unknownClasses.has("not-a-class")).toBe(true);
+		expect(unknownClasses.has("p-2")).toBe(false);
+	});
+
+	it("applies an attribute variant, and follows the attribute", async () => {
+		const host = setup();
+		const state = signal("unchecked");
+		mount(
+			html`<div><div data-state="${state}" class="h-4 bg-white data-[state=checked]:bg-primary"><span>x</span></div></div>`,
+			{ viewport },
+		);
+		const view = () => propsOf(host, "RCTView", (p) => p.height === 16);
+		expect(view().backgroundColor).toBe(colorToArgb("#ffffff"));
+		state("checked");
+		await Promise.resolve();
+		expect(view().backgroundColor).toBe(colorToArgb("#171717"));
+	});
+
+	it("takes the dark scheme's values, and dark: variants", async () => {
+		const host = setup();
+		mount(html`<div><div class="h-5 bg-primary dark:border-2"></div></div>`, {
+			viewport,
+		});
+		const view = () => propsOf(host, "RCTView", (p) => p.height === 20);
+		expect(view()).toMatchObject({ backgroundColor: colorToArgb("#171717") });
+		expect(view().borderWidth).toBeUndefined();
+		colorScheme("dark");
+		await Promise.resolve();
+		expect(view()).toMatchObject({
+			backgroundColor: colorToArgb("#e5e5e5"),
+			borderWidth: 2,
+		});
+		colorScheme("light");
+	});
+
+	it("matches an ancestor (group-*), the children (*:) and descendants ([&_svg]:)", async () => {
+		const host = setup();
+		const open = signal("closed");
+		mount(
+			html`<div class="group *:min-h-6" data-open="${open}"><div class="h-7 group-data-[open=yes]:hidden"></div><div class="[&_svg]:size-4"><svg viewBox="0 0 1 1"><path d="M0 0h1" /></svg></div></div>`,
+			{ viewport },
+		);
+		const hidden = () => propsOf(host, "RCTView", (p) => p.height === 28);
+		expect(hidden().display).toBeUndefined();
+		expect(hidden().minHeight).toBe(24);
+		expect(propsOf(host, "OrbitVector")).toMatchObject({
+			width: 16,
+			height: 16,
+		});
+		open("yes");
+		await Promise.resolve();
+		expect(hidden().display).toBe("none");
+	});
+
+	it("matches a previous sibling (peer-*), and a viewport width (sm:)", () => {
+		const host = setup();
+		mount(
+			html`<div><div class="peer" data-x="on"></div><div class="h-9 peer-data-[x=on]:w-10 sm:w-12"></div></div>`,
+			{ viewport: { width: 400, height: 800 } },
+		);
+		expect(propsOf(host, "RCTView", (p) => p.height === 36).width).toBe(40);
+		const wide = setup();
+		mount(html`<div><div class="h-9 sm:w-12"></div></div>`, {
+			viewport: { width: 700, height: 800 },
+		});
+		expect(propsOf(wide, "RCTView", (p) => p.height === 36).width).toBe(48);
+	});
+
+	it("composes the variables classes share: leading over text size, shrink in a flex row", () => {
+		const host = setup();
+		mount(
+			html`<div class="flex"><p class="text-sm leading-tight">a</p><p class="text-sm">b</p><div class="h-1 hover:bg-primary"></div></div>`,
+			{ viewport },
+		);
+		const [tight, plain] = host.all("RCTText").map(([, n]) => n.props);
+		expect(tight).toMatchObject({ fontSize: 14, lineHeight: 14 * 1.25 });
+		expect(plain?.lineHeight).toBeCloseTo(20, 1);
+		// A flex item shrinks, as in CSS; nothing is hovered on a touch screen.
+		const bar = propsOf(host, "RCTView", (p) => p.height === 4);
+		expect(bar).toMatchObject({ flexShrink: 1 });
+		expect(bar.backgroundColor).toBeUndefined();
+	});
+
+	it("reads the flex, size, border, text and fit properties orbit draws", () => {
+		const host = setup();
+		mount(
+			html`<div class="flex flex-col flex-wrap items-start content-center justify-end">
+				<div class="h-11 flex-1 basis-1/2 shrink-0 grow self-end relative overflow-hidden aspect-video min-w-0 max-w-sm mx-auto border-t-2 border-dashed rounded-t-md opacity-50"></div>
+				<div class="h-12 flex-none fixed inset-0 border-none border-4"></div>
+				<div class="h-13 flex-auto w-screen max-h-dvh my-2 ps-3 pe-1 py-0.5 gap-x-2 gap-y-4"></div>
+				<p class="italic font-mono tracking-tight text-center leading-6 text-start">t</p>
+				<img class="h-14 object-cover" src="https://cdn.example.com/a.jpg" />
+				<input class="h-15 placeholder:text-muted-foreground field-sizing-content" />
+			</div>`,
+			{ viewport },
+		);
+		const view = (h: number) => propsOf(host, "RCTView", (p) => p.height === h);
+		expect(
+			propsOf(host, "RCTView", (p) => p.flexWrap === "wrap"),
+		).toMatchObject({
+			flexDirection: "column",
+			alignItems: "flex-start",
+			alignContent: "center",
+			justifyContent: "flex-end",
+		});
+		expect(view(44)).toMatchObject({
+			flexGrow: 1,
+			flexShrink: 0,
+			flexBasis: "50%",
+			alignSelf: "flex-end",
+			position: "relative",
+			overflow: "hidden",
+			aspectRatio: 16 / 9,
+			minWidth: 0,
+			maxWidth: 384,
+			marginHorizontal: "auto",
+			borderTopWidth: 2,
+			opacity: 0.5,
+		});
+		expect(view(48)).toMatchObject({
+			flexGrow: 0,
+			flexShrink: 0,
 			position: "absolute",
 			top: 0,
 			left: 0,
-			right: 0,
+			borderWidth: 0,
 		});
-		expect(tw("text-white/80").text).toEqual({
-			color: "rgba(255, 255, 255, 0.8)",
+		expect(view(52)).toMatchObject({
+			flexGrow: 1,
+			width: 400,
+			maxHeight: 800,
+			marginVertical: 8,
+			paddingLeft: 12,
+			paddingRight: 4,
+			paddingVertical: 2,
+			rowGap: 16,
+			columnGap: 8,
 		});
-		expect(tw("bg-slate-900/40").box).toEqual({
-			backgroundColor: "rgba(15, 23, 42, 0.4)",
+		expect(propsOf(host, "RCTText")).toMatchObject({
+			fontStyle: "italic",
+			fontFamily: "monospace",
+			letterSpacing: -0.4,
+			textAlign: "left",
+			lineHeight: 24,
+		});
+		expect(propsOf(host, "OrbitImage")).toMatchObject({ objectFit: "cover" });
+		expect(propsOf(host, "OrbitTextInput")).toMatchObject({
+			placeholderColor: colorToArgb("#737373"),
+			fieldSizing: "content",
 		});
 	});
 
-	it("collects classes it does not know, and ignores colours it has no shade for", () => {
-		tw("grid-cols-3 bg-teal-500 bg-nope-500/50");
-		expect(unknownClasses.has("grid-cols-3")).toBe(true);
-		expect(unknownClasses.has("bg-teal-500")).toBe(true);
-		expect(unknownClasses.has("bg-nope-500/50")).toBe(true);
+	it("applies the base layer: the border token, and the page's background and text on the root", () => {
+		const host = setup();
+		mount(html`<div class="h-3 border"></div><p>x</p>`, { viewport });
+		expect(propsOf(host, "RCTView", (p) => p.height === 12)).toMatchObject({
+			borderWidth: 1,
+			borderColor: colorToArgb("#e5e5e5"),
+		});
+		expect(propsOf(host, "RCTView", (p) => p.flex === 1).backgroundColor).toBe(
+			colorToArgb("#ffffff"),
+		);
+		expect(propsOf(host, "RCTText").color).toBe(colorToArgb("#0a0a0a"));
+	});
+
+	it("makes no box of the white space between slots in a flex container", () => {
+		const host = setup();
+		mount(
+			html`<div class="flex gap-2">
+				${html`<p>a</p>`}
+				${html`<p>b</p>`}
+			</div>`,
+			{ viewport },
+		);
+		expect(host.all("RCTText").map(([tag]) => host.text(tag))).toEqual([
+			"a",
+			"b",
+		]);
+	});
+
+	it("refuses a table it cannot read", () => {
+		expect(codeOf(() => useStyles({ version: 2 }))).toBe("E_ORBIT_STYLE_TABLE");
 	});
 });
 
@@ -118,7 +315,7 @@ describe("template mapping", () => {
 		await Promise.resolve();
 
 		const patch = host.batches.at(-1)?.find((op) => op[0] === "u");
-		expect(patch?.[2]).toMatchObject({ color: colorToArgb("#16a34a") });
+		expect(patch?.[2]).toMatchObject({ color: colorToArgb("#00a63e") });
 	});
 
 	it("swaps a reactive template inside text, and plain arrays of values", async () => {

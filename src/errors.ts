@@ -29,7 +29,9 @@ export type OrbitErrorCode =
 	/** `useScreen()` in a component no screen of a stack built. */
 	| "E_ORBIT_NO_SCREEN"
 	/** One stack put in two places: a stack is shown once. */
-	| "E_ORBIT_STACK_SHOWN";
+	| "E_ORBIT_STACK_SHOWN"
+	/** `useStyles` got something other than a table `ream css:compile` wrote. */
+	| "E_ORBIT_STYLE_TABLE";
 
 export class OrbitError extends Error {
 	readonly code: OrbitErrorCode;

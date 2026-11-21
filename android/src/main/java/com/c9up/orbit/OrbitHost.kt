@@ -147,10 +147,12 @@ object OrbitHost {
     val text = OrbitText.decode(spans, density)
     val maxPx = if (maxWidth.isInfinite() || maxWidth > 1e6f) Int.MAX_VALUE / 2 else (maxWidth * density).toInt()
     val (w, h) = text.measure(maxPx)
-    // Whole dp, rounded up: the layout rounds frames to whole dp, and a text
-    // even a fraction narrower than it measured wraps and loses its last word.
+    // The width in whole dp, rounded up: the layout rounds frames to whole dp,
+    // and a text even a fraction narrower than it measured wraps and loses its
+    // last word. The height stays exact — rounded up, every line of a
+    // 19.25 dp line height grew by most of a dp against the web.
     val wBits = java.lang.Float.floatToRawIntBits(kotlin.math.ceil(w / density)).toLong()
-    val hBits = java.lang.Float.floatToRawIntBits(kotlin.math.ceil(h / density)).toLong()
+    val hBits = java.lang.Float.floatToRawIntBits(h / density).toLong()
     return (wBits shl 32) or (hBits and 0xffffffffL)
   }
 

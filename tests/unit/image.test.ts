@@ -43,8 +43,11 @@ describe("images", () => {
 		expect(image(host).node.props).toEqual({
 			width: 64,
 			height: 64,
-			borderRadius: 9999,
+			// calc(infinity * 1px), clamped to the box when drawn.
+			borderRadius: 1000000,
 			objectFit: "cover",
+			// Tailwind's preflight: an image never overflows its container.
+			maxWidth: "100%",
 			src: "https://cdn.example.com/a.jpg",
 			alt: "Portrait",
 		});

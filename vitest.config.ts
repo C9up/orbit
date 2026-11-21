@@ -8,9 +8,13 @@ export default defineConfig({
 			"react-native": fileURLToPath(
 				new URL("./tests/unit/reactNative.ts", import.meta.url),
 			),
+			"@c9up/orbit-styles": fileURLToPath(
+				new URL("./tests/styles/table.json", import.meta.url),
+			),
 		},
 	},
 	test: {
+		setupFiles: ["tests/unit/setup.ts"],
 		coverage: {
 			provider: "v8",
 			include: ["src/**"],

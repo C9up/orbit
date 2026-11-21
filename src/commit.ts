@@ -1,6 +1,7 @@
 import { OrbitError } from "./errors.js";
 import { currentHost, type OrbitHost } from "./host.js";
 import { type NativeNode, setDirtyListener } from "./node.js";
+import { viewportSize } from "./styles.js";
 
 /**
  * Committing the JS tree to the Rust host: one JSON batch per commit over JSI
@@ -182,6 +183,7 @@ export function mountTree(tree: NativeNode, options: MountOptions): Root {
 		if (type === "topViewport") {
 			// The window resized (the keyboard came or went): lay out again.
 			host.setViewport(x, y);
+			viewportSize({ width: x, height: y });
 			root.commit();
 			return;
 		}

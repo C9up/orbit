@@ -40,7 +40,7 @@ describe("svg", () => {
 		const [, node] = vectorOf(host);
 		expect(node.props).toMatchObject({ width: 24, height: 24 });
 		expect(node.props.vector).toEqual({
-			color: colorToArgb("#64748b"),
+			color: colorToArgb("#62748e"),
 			root: {
 				t: "svg",
 				a: {
