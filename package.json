@@ -1,7 +1,7 @@
 {
   "name": "@c9up/orbit",
   "version": "0.1.0",
-  "description": "Orbit \u2014 aurora components as native views on a phone, laid out and diffed by a Rust host",
+  "description": "Orbit — aurora components as native views on a phone, laid out and diffed by a Rust host",
   "license": "MIT",
   "type": "module",
   "main": "./src/index.ts",
@@ -48,6 +48,28 @@
     "README.md",
     "LICENSE"
   ],
+  "reamNative": {
+    "specs": "specs",
+    "rust": [
+      {
+        "manifest": "crates/orbit-host/Cargo.toml",
+        "lib": "orbit_host"
+      }
+    ],
+    "android": {
+      "java": "android/src/main/java",
+      "cmake": {
+        "file": "android/orbit.cmake",
+        "link": "orbit_link"
+      },
+      "cxxModules": [
+        {
+          "name": "NativeOrbit",
+          "header": "NativeOrbit.h"
+        }
+      ]
+    }
+  },
   "publishConfig": {
     "main": "./dist/index.js",
     "types": "./dist/index.d.ts",

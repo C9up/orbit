@@ -13,11 +13,19 @@
 
 set(ORBIT_ANDROID_DIR ${CMAKE_CURRENT_LIST_DIR})
 
+# `ream android:*` builds the Rust host into REAM_RUST_DIR/<abi>/; an app wired
+# by hand runs scripts/build-android.sh, which writes android/libs/<abi>/.
+if(DEFINED REAM_RUST_DIR)
+  set(ORBIT_HOST_LIB ${REAM_RUST_DIR}/${ANDROID_ABI}/liborbit_host.a)
+else()
+  set(ORBIT_HOST_LIB ${ORBIT_ANDROID_DIR}/libs/${ANDROID_ABI}/liborbit_host.a)
+endif()
+
 function(orbit_link target)
   target_sources(${target} PRIVATE ${ORBIT_ANDROID_DIR}/src/main/cpp/NativeOrbit.cpp)
   target_include_directories(${target} PUBLIC ${ORBIT_ANDROID_DIR}/src/main/cpp)
   add_library(orbit_host STATIC IMPORTED)
   set_target_properties(orbit_host PROPERTIES
-    IMPORTED_LOCATION ${ORBIT_ANDROID_DIR}/libs/${ANDROID_ABI}/liborbit_host.a)
+    IMPORTED_LOCATION ${ORBIT_HOST_LIB})
   target_link_libraries(${target} orbit_host)
 endfunction()

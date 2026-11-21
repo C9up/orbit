@@ -153,11 +153,26 @@ without effects either.
   touch forwarding, the vsync tick) and the JSI module (`NativeOrbit.cpp`).
 - `specs/NativeOrbit.ts` — the TurboModule spec React Native's codegen reads.
 
-Until `ream` builds mobile apps, an app wires orbit by hand: run
-`bash node_modules/@c9up/orbit/scripts/build-android.sh` (npm does not keep
-the executable bit), include `android/orbit.cmake` in its native build,
-register `NativeOrbit` in its module provider, and add the spec and the Kotlin
-sources to the app module. iOS is not there yet.
+An app's entry calls `run` from `@c9up/orbit/react-native`, which registers
+the app, gives orbit its native host and mounts the root component:
+
+```ts
+import { run } from "@c9up/orbit/react-native";
+import { App } from "./App.js";
+
+run(App);
+```
+
+`ream android:run` and `ream android:build` build such an app: orbit declares
+its native parts in its package.json (`reamNative`: the Kotlin sources, the
+CMake that links the JSI module and the Rust host, the C++ module to register,
+the spec, the Rust crate), and ream wires them into the Android project it
+generates and cross-compiles the Rust host for the phone. See the CLI's
+"Mobile apps". An app wired by hand still can: run
+`bash node_modules/@c9up/orbit/scripts/build-android.sh`, include
+`android/orbit.cmake` in its native build, register `NativeOrbit` in its module
+provider, and add the spec and the Kotlin sources to the app module. iOS is
+not there yet.
 
 ## Requirements
 

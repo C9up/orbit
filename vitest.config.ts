@@ -1,6 +1,15 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+	resolve: {
+		// orbit's app entry imports React Native, which only an app installs.
+		alias: {
+			"react-native": fileURLToPath(
+				new URL("./tests/unit/reactNative.ts", import.meta.url),
+			),
+		},
+	},
 	test: {
 		coverage: {
 			provider: "v8",
