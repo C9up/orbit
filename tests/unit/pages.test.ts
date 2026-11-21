@@ -242,7 +242,8 @@ describe("server-driven pages", () => {
 		await router.put("/orders", { n: 2 });
 		expect(requests.at(-1)).toMatchObject({
 			method: "PUT",
-			headers: { "x-xsrf-token": "t+1" },
+			// Verbatim: the server compares the header to the cookie byte for byte.
+			headers: { "x-xsrf-token": "t%2B1" },
 		});
 	});
 

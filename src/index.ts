@@ -31,6 +31,13 @@ export {
 	type SpringOptions,
 	type TimingOptions,
 } from "./motion.js";
+/** The app's ream server, one connection for pages, comet and relay. */
+export {
+	connectServer,
+	type ServerConnection,
+	type ServerEvent,
+	ServerEventStream,
+} from "./server.js";
 export {
 	createStack,
 	/** What the back button does: pop the innermost shown stack (false: nothing to pop). */

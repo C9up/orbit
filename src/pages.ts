@@ -28,6 +28,7 @@ import {
 	router,
 } from "@c9up/photon/client/core";
 import { OrbitError } from "./errors.js";
+import { connectServer, type ServerConnection } from "./server.js";
 import { createStack, type Stack, type StackOptions } from "./stack.js";
 import { setLinkHandler } from "./template.js";
 
@@ -41,10 +42,11 @@ type PageFunction = {
 
 export interface ServerPagesOptions {
 	/**
-	 * The ream server's origin. https, or http to this machine (`localhost`,
-	 * `127.0.0.1`, through `adb reverse`) or the emulator's host (`10.0.2.2`).
+	 * The ream server: its origin (https, or http to this machine through
+	 * `adb reverse` or to the emulator's host `10.0.2.2`), or the connection
+	 * `connectServer` made — the one comet and relay go through too.
 	 */
-	server: string;
+	server: string | ServerConnection;
 	/** The pages the server may name, by the name it renders them under. */
 	pages: { [name: string]: PageFunction };
 	/** The first page's path. Default `/`. */
@@ -64,33 +66,6 @@ function isPage(value: unknown): value is PageFunction {
 	return typeof value === "function";
 }
 
-const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "10.0.2.2"]);
-
-function serverOrigin(server: string): string {
-	const url = new URL(server);
-	const local = LOCAL_HOSTS.has(url.hostname);
-	if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {
-		throw new OrbitError(
-			"E_ORBIT_INSECURE_SERVER",
-			`[orbit] serverPages talks to ${url.origin}: use https (plain http only reaches this machine or the emulator's host)`,
-		);
-	}
-	return url.origin;
-}
-
-/** The `XSRF-TOKEN` a response set: what photon sends back on a mutation. */
-function xsrfFrom(response: Response): string | undefined {
-	const header = response.headers.get("set-cookie");
-	if (header === null) return undefined;
-	const match = /(?:^|[,;]\s*)XSRF-TOKEN=([^;,]*)/.exec(header);
-	if (match === null) return undefined;
-	try {
-		return decodeURIComponent(match[1] ?? "");
-	} catch {
-		return undefined;
-	}
-}
-
 const Loading = (): TemplateResult => html`<div class="flex-1"></div>`;
 
 const Failed = (error: unknown, retry: () => void): TemplateResult =>
@@ -106,11 +81,14 @@ interface Entry {
 
 /** The stack the server's pages are shown in; put it in a template. */
 export function serverPages(options: ServerPagesOptions): Stack {
-	const origin = serverOrigin(options.server);
-	const first = new URL(options.url ?? "/", origin).href;
+	const server =
+		typeof options.server === "string"
+			? connectServer(options.server)
+			: options.server;
+	const origin = server.origin;
+	const first = server.url(options.url ?? "/");
 	const failed = options.failed ?? Failed;
 	let entries: Entry[] = [{ state: null, url: first }];
-	let xsrf: string | undefined;
 	let restore: ((state: unknown) => void) | undefined;
 	/** The page a visit rendered, waiting for photon to say how it goes in history. */
 	let pending: { page: PageFunction; props: Record<string, unknown> } | null =
@@ -149,19 +127,9 @@ export function serverPages(options: ServerPagesOptions): Stack {
 	const host: PhotonHost = {
 		href: () => current().url,
 		baseUri: () => current().url,
-		fetch: async (url, init) => {
-			const target = absolute(url);
-			if (new URL(target).origin !== origin) {
-				throw new TypeError(
-					`[orbit] server pages only ask ${origin}, not ${target}`,
-				);
-			}
-			// The server is the app's own: its session cookie goes with every
-			// request (React Native sends cookies only with credentials).
-			const response = await fetch(target, { ...init, credentials: "include" });
-			xsrf = xsrfFrom(response) ?? xsrf;
-			return response;
-		},
+		// The connection refuses another origin, sends the session cookie and
+		// keeps the XSRF token the server sets.
+		fetch: (url, init) => server.fetch(absolute(url), init),
 		state: () => current().state,
 		push: (state, url) => {
 			entries.push({ state, url: absolute(url) });
@@ -174,7 +142,7 @@ export function serverPages(options: ServerPagesOptions): Stack {
 		load: (url) => start(absolute(url)),
 		reload: () => start(current().url),
 		emit: () => {},
-		cookie: (name) => (name === "XSRF-TOKEN" ? xsrf : undefined),
+		cookie: (name) => (name === "XSRF-TOKEN" ? server.xsrf() : undefined),
 		memoryHistory: true,
 		listen: (wire) => {
 			restore = wire.restore;

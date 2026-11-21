@@ -212,6 +212,13 @@ page imports from `@c9up/aurora` and `@c9up/photon/client/core`).
 - React Native's `URL` resolves relative references wrongly; the app entry
   installs a standard one (`installStandardUrl()` for an app wired by hand).
 
+One connection to the server carries pages, comet calls and relay
+subscriptions: `connectServer(origin)` gives `fetch` (that origin only, the
+session cookie, the `XSRF-TOKEN` echoed on mutations), `json` (comet's
+transport), `stream` (server-sent events over React Native's streaming XHR,
+for `configureRelay({ stream, fetch })`) and `authorize(token)` (a Bearer
+token on every request and stream). Pass it as `serverPages({ server })`.
+
 ## Long lists
 
 `each(items, key, render, { lazy: { estimate, overscan, from } })` builds only
