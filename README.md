@@ -11,8 +11,8 @@ values run on the UI thread, driven by the host on every vsync, so a busy JS
 thread does not stop them. No React, no Expo.
 
 ```ts
-import { component, html, signal } from "@c9up/aurora/core";
-import { mount, MotionValue, useHost } from "@c9up/orbit";
+import { component, html, MotionValue, signal } from "@c9up/aurora/core";
+import { mount, useHost } from "@c9up/orbit";
 import { Dimensions, TurboModuleRegistry } from "react-native";
 
 const Counter = component(() => {
@@ -45,7 +45,7 @@ mount(Counter({}), { viewport: Dimensions.get("window") });
 | `backdrop-blur-*` | what is behind the view, blurred (Android 12+; the translucent background alone below) |
 | `@click=${fn}` | a press, recognized natively: fires on release if the finger stayed put; a ripple shows at once |
 | `@longpress`, `@pan`, `@swipe` | recognized natively too (see Gestures) |
-| `motion=${{ opacity, translateX, translateY, scale, visible }}` | UI-thread animation (`MotionValue`; `visible` hides at or below 0.5, laid out but not drawn or touchable) |
+| `motion=${{ opacity, translateX, translateY, scale, visible }}` | UI-thread animation (aurora's `MotionValue`, the same one the browser animates; `visible` hides at or below 0.5, laid out but not drawn or touchable) |
 | `scroll-y=${value}` | the scroll offset feeds a `MotionValue` |
 | `input`, `textarea` | the platform's text field (`EditText`): typing never waits for JS |
 | `@input`, `@change`, `@focus`, `@blur`, Enter as `@keydown` | the field's events, `event.target.value` carrying the text |

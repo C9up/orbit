@@ -1,4 +1,5 @@
 import { OrbitError } from "./errors.js";
+import { useNativeMotion } from "./motion.js";
 
 /**
  * What orbit needs from the native side: the Rust host behind JSI (the
@@ -76,6 +77,8 @@ let host: OrbitHost | null = null;
 /** Give orbit its native host, once, before `mount`. */
 export function useHost(next: OrbitHost): void {
 	host = next;
+	// aurora's motion values made from now on live in this host.
+	useNativeMotion();
 }
 
 export function currentHost(): OrbitHost {
