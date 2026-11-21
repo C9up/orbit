@@ -61,7 +61,9 @@ export interface OrbitHost {
 		damping: number,
 		mass: number,
 	): void;
-	/** prop: 0 opacity, 1 translateX, 2 translateY, 3 scale. */
+	/** Forget a motion value or interpolation, its animation and its bindings. */
+	motionDispose(tag: number): void;
+	/** prop: 0 opacity, 1 translateX, 2 translateY, 3 scale, 4 visible (> 0.5). */
 	motionBind(view: number, prop: number, node: number): void;
 	motionBindScroll(scrollView: number, value: number): void;
 }

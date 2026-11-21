@@ -8,12 +8,20 @@
  * React Native supplies the JS engine, the JSI module registry and the
  * activity; nothing of React is used. `run` registers the app under the name
  * the activity `ream android:*` generates starts, gives orbit its native host
- * and mounts the root component with the launch props (intent extras).
+ * and mounts the root component with the launch props (intent extras). The
+ * back button and the back gesture pop the innermost shown stack; with none
+ * to pop, the app goes back as any Android app does.
  */
 import type { TemplateResult } from "@c9up/aurora/renderer";
-import { AppRegistry, Dimensions, TurboModuleRegistry } from "react-native";
+import {
+	AppRegistry,
+	BackHandler,
+	Dimensions,
+	TurboModuleRegistry,
+} from "react-native";
 import { OrbitError } from "../errors.js";
 import { NATIVE_MODULE_NAME, type OrbitHost, useHost } from "../host.js";
+import { goBack } from "../stack.js";
 import { mount } from "../template.js";
 
 /** The name the generated activity starts the app by. */
@@ -49,6 +57,7 @@ export function run(root: (props: LaunchProps) => TemplateResult): void {
 			);
 		}
 		useHost(host);
+		BackHandler.addEventListener("hardwareBackPress", goBack);
 		mount(root(initialProps ?? {}), { viewport: Dimensions.get("window") });
 	});
 }

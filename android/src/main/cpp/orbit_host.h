@@ -27,6 +27,7 @@ void orbit_motion_set(int32_t tag, double value);
 void orbit_motion_stop(int32_t tag);
 void orbit_motion_frames(int32_t tag, const double* frames, size_t len, double to, bool looping);
 void orbit_motion_spring(int32_t tag, double to, double stiffness, double damping, double mass);
+void orbit_motion_dispose(int32_t tag);
 void orbit_motion_bind(int32_t view, uint8_t prop, int32_t node);
 void orbit_motion_bind_scroll(int32_t scrollView, int32_t value);
 int32_t orbit_motion_tick(int64_t nowNs, const int32_t* scrollTags, const float* scrollY, size_t count, OrbitBuf* out);

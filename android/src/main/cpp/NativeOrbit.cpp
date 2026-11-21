@@ -178,6 +178,10 @@ void NativeOrbit::motionSpring(jsi::Runtime&, double tag, double to, double stif
   orbit_motion_spring(static_cast<int32_t>(tag), to, stiffness, damping, mass);
 }
 
+void NativeOrbit::motionDispose(jsi::Runtime&, double tag) {
+  orbit_motion_dispose(static_cast<int32_t>(tag));
+}
+
 void NativeOrbit::motionBind(jsi::Runtime&, double view, double prop, double node) {
   orbit_motion_bind(static_cast<int32_t>(view), static_cast<uint8_t>(prop), static_cast<int32_t>(node));
 }

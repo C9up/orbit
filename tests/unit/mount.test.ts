@@ -137,6 +137,20 @@ describe("mount", () => {
 		expect(seen).toEqual([1]);
 	});
 
+	it("shows an element in a slot that held nothing at first", () => {
+		const host = setup();
+		const open = signal(false);
+		const Badge = component(() => html`<p>badge</p>`);
+		const root = mount(
+			html`<div><p>page</p>${() => (open() ? Badge() : null)}</div>`,
+			{ viewport },
+		);
+		open(true);
+		root.flush();
+		const texts = host.all("RCTText").map(([tag]) => host.text(tag));
+		expect(texts).toEqual(["page", "badge"]);
+	});
+
 	it("makes each child of a flex container its own item", () => {
 		const host = setup();
 		mount(

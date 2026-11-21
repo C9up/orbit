@@ -1027,6 +1027,7 @@ impl Host {
             self.parent.remove(&tag);
             self.spans.remove(&tag);
             gesture::with(|g| g.remove(tag));
+            motion::with(|m| m.forget_view(tag));
             info.deleted.push(tag);
         }
         info.nodes = self.nodes.len();
@@ -1234,6 +1235,11 @@ pub unsafe extern "C" fn orbit_motion_frames(
 #[no_mangle]
 pub extern "C" fn orbit_motion_spring(tag: i32, to: f64, stiffness: f64, damping: f64, mass: f64) {
     motion::with(|m| m.spring(tag, to, stiffness, damping, mass));
+}
+
+#[no_mangle]
+pub extern "C" fn orbit_motion_dispose(tag: i32) {
+    motion::with(|m| m.dispose(tag));
 }
 
 #[no_mangle]

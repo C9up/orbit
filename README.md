@@ -45,7 +45,7 @@ mount(Counter({}), { viewport: Dimensions.get("window") });
 | `backdrop-blur-*` | what is behind the view, blurred (Android 12+; the translucent background alone below) |
 | `@click=${fn}` | a press, recognized natively: fires on release if the finger stayed put; a ripple shows at once |
 | `@longpress`, `@pan`, `@swipe` | recognized natively too (see Gestures) |
-| `motion=${{ opacity, translateX, translateY, scale }}` | UI-thread animation (`MotionValue`) |
+| `motion=${{ opacity, translateX, translateY, scale, visible }}` | UI-thread animation (`MotionValue`; `visible` hides at or below 0.5, laid out but not drawn or touchable) |
 | `scroll-y=${value}` | the scroll offset feeds a `MotionValue` |
 | `input`, `textarea` | the platform's text field (`EditText`): typing never waits for JS |
 | `@input`, `@change`, `@focus`, `@blur`, Enter as `@keydown` | the field's events, `event.target.value` carrying the text |
@@ -83,6 +83,44 @@ refused. Remote images have no disk cache yet.
 
 Not mapped yet (`E_ORBIT_UNSUPPORTED_ELEMENT`): `select`, `svg`, `canvas`. Line height and accessibility are still to come; the Tailwind subset is hand-written until it
 is compiled from nebula's theme.
+
+## Screens
+
+A stack of screens, each an aurora component:
+
+```ts
+import { createStack, useScreen } from "@c9up/orbit";
+
+export const App = component(() => html`${createStack(Home)}`);
+
+const Home = component(() => {
+  const screen = useScreen();
+  return html`<div @click=${() => screen.push(Detail, { id: 3 })}>…</div>`;
+});
+```
+
+- `push(Screen, props)` shows a screen on top; `pop()` ends the top one;
+  `replace(Screen, props)` swaps it. The Android back button and back gesture
+  pop the innermost stack shown; with nothing to pop, the app goes back as
+  any Android app does.
+- A covered screen stays built: its views are laid out under the top one (a
+  scroll view keeps its offset), its signals and effects keep running, and it
+  is hidden once covered — not drawn, not touchable. `screen.focused()` is
+  true while a screen is the one shown; an effect that should pause reads it.
+- A popped or replaced screen ends at once: its effects stop and its
+  `onUnmount` runs; its views go when its transition is over.
+- Transitions are motion values, played by orbit-host on the UI thread: the
+  new screen slides in from the right edge while the covered one drifts left
+  (`transition: 'none'` switches at once; `duration`, default 300 ms).
+- A screen paints its own background (its root's `bg-…`): the stack paints
+  none, since each full-screen layer is filled again on every frame. With
+  screens that leave areas transparent, `background` paints one behind each.
+- A screen sees what was provided around its stack (`provide`/`inject`), even
+  one pushed long after; a stack can sit in a screen (a tab with its own
+  history).
+
+Nothing here knows URLs: a router, or server-driven pages, pushes the screen
+a URL names.
 
 ## Long lists
 

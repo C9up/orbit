@@ -10,6 +10,12 @@ declare module "react-native" {
 			run: (params: { initialProps?: { [key: string]: unknown } }) => void,
 		): void;
 	};
+	export const BackHandler: {
+		addEventListener(
+			event: "hardwareBackPress",
+			handler: () => boolean,
+		): { remove(): void };
+	};
 	export const Dimensions: {
 		get(dimension: "window"): { width: number; height: number };
 	};

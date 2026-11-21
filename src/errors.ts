@@ -25,7 +25,11 @@ export type OrbitErrorCode =
 	/** `<img src>` with a scheme that is not an image source (`data:`, `javascript:`…). */
 	| "E_ORBIT_IMAGE_SOURCE"
 	/** Two elements of an `each` list share a key: a key names one row. */
-	| "E_ORBIT_DUPLICATE_KEY";
+	| "E_ORBIT_DUPLICATE_KEY"
+	/** `useScreen()` in a component no screen of a stack built. */
+	| "E_ORBIT_NO_SCREEN"
+	/** One stack put in two places: a stack is shown once. */
+	| "E_ORBIT_STACK_SHOWN";
 
 export class OrbitError extends Error {
 	readonly code: OrbitErrorCode;

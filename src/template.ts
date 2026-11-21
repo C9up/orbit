@@ -20,6 +20,7 @@ import {
 } from "@c9up/aurora/core";
 import {
 	assertBindable,
+	bindTemplateContext,
 	type EachList,
 	firstWindow,
 	LazyLayout,
@@ -57,6 +58,7 @@ import {
 	rawText,
 	type Style,
 } from "./node.js";
+import { Stack } from "./stack.js";
 import { isScrollContainer, splitScroll, tw } from "./tailwind.js";
 
 type Part = string | number; // number = index into the template's values
@@ -314,9 +316,11 @@ function scoped<T>(build: () => T): [T, Array<() => void>] {
 /**
  * A reactive slot, read once per change, in its region only — never called
  * beforehand to see what it gives, which ran a component twice and kept the
- * first one's effects. Its first value decides where it sits: a primitive
- * joins the text around it as one raw run, updated in place; anything else is
- * built by `other`.
+ * first one's effects. Its first value decides where it sits: a string, a
+ * number or `true` joins the text around it as one raw run, updated in place;
+ * anything else is built by `other`. Nothing at first (`null`, `undefined`,
+ * `false`: `${() => open() ? Panel() : null}`) is not text — what comes later
+ * is most often an element, which a text run cannot hold.
  */
 function reactiveSlot(
 	slot: () => unknown,
@@ -327,7 +331,11 @@ function reactiveSlot(
 	const child = region(slot, (value) => {
 		if (!kind.known) {
 			kind.known = true;
-			kind.text = isPrimitive(value);
+			kind.text =
+				isPrimitive(value) &&
+				value !== null &&
+				value !== undefined &&
+				value !== false;
 		}
 		if (!kind.text) return other(value);
 		if (raw) raw.setProps({ text: str(value) });
@@ -1137,7 +1145,7 @@ function textValue(v: unknown): Child[] {
 	if (isGetter(v)) return [reactiveSlot(v, textValue).child];
 	if (isTemplateResult(v)) {
 		ownLifecycle(v);
-		return textChildren(parse(v.strings), v.values);
+		return textChildren(parse(v.strings), slotValues(v));
 	}
 	if (Array.isArray(v)) return v.flatMap(textValue);
 	return isPrimitive(v) && str(v) ? [rawText(str(v))] : [];
@@ -1197,18 +1205,35 @@ function viewChildren(
 }
 
 function viewValue(v: unknown, inherited: Style): Child[] {
+	if (v instanceof Stack) {
+		return [
+			v.attach(
+				(result) => scoped(() => viewValue(result, inherited)),
+				(end) => collecting?.push(end),
+			),
+		];
+	}
 	const list = readEach(v);
 	if (list) return [keyedRegion(list, (row) => viewValue(row, inherited))];
 	if (isGetter(v)) return [region(v, (value) => viewValue(value, inherited))];
 	if (isTemplateResult(v)) {
 		ownLifecycle(v);
-		return viewChildren(parse(v.strings), v.values, inherited);
+		return viewChildren(parse(v.strings), slotValues(v), inherited);
 	}
 	if (Array.isArray(v)) return v.flatMap((item) => viewValue(item, inherited));
 	const text = str(v);
 	return text
 		? [new NativeNode("RCTText", flatten(inherited), [rawText(text)])]
 		: [];
+}
+
+/**
+ * A template's values, each function bound to the providers the template was
+ * written under: a component a slot builds later (a row, a branch, a pushed
+ * screen's child) still injects what was provided around it.
+ */
+function slotValues(result: TemplateResult): unknown[] {
+	return result.values.map((value) => bindTemplateContext(result, value));
 }
 
 // Browser defaults for the root text context (16px, black).

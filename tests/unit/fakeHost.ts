@@ -199,6 +199,9 @@ export class FakeHost implements OrbitHost {
 	): void {
 		this.motion.push(["spring", tag, to, stiffness, damping, mass]);
 	}
+	motionDispose(tag: number): void {
+		this.motion.push(["dispose", tag]);
+	}
 	motionBind(view: number, prop: number, node: number): void {
 		this.motion.push(["bind", view, prop, node]);
 	}

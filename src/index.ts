@@ -8,6 +8,9 @@
  *
  *   useHost(TurboModuleRegistry.getEnforcing("NativeOrbit"))
  *   mount(App(), { viewport: Dimensions.get("window") })
+ *
+ * Screens: `createStack(Home)` in the root, `useScreen().push(Detail, props)`
+ * in a screen; the Android back button pops (see `@c9up/orbit/react-native`).
  */
 
 export { colorToArgb } from "./color.js";
@@ -28,5 +31,14 @@ export {
 	type SpringOptions,
 	type TimingOptions,
 } from "./motion.js";
+export {
+	createStack,
+	type Navigator,
+	type Screen,
+	type ScreenComponent,
+	type Stack,
+	type StackOptions,
+	useScreen,
+} from "./stack.js";
 export { unknownClasses } from "./tailwind.js";
 export { type GestureEvent, mount } from "./template.js";

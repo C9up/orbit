@@ -24,7 +24,9 @@ export interface Spec extends TurboModule {
   readonly motionStop: (tag: number) => void;
   readonly motionFrames: (tag: number, frames: ReadonlyArray<number>, to: number, loop: boolean) => void;
   readonly motionSpring: (tag: number, to: number, stiffness: number, damping: number, mass: number) => void;
-  /** prop: 0 opacity, 1 translateX, 2 translateY, 3 scale. */
+  /** Forget a motion value or interpolation, its animation and its bindings. */
+  readonly motionDispose: (tag: number) => void;
+  /** prop: 0 opacity, 1 translateX, 2 translateY, 3 scale, 4 visible (> 0.5). */
   readonly motionBind: (view: number, prop: number, node: number) => void;
   readonly motionBindScroll: (scrollView: number, value: number) => void;
 }

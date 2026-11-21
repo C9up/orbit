@@ -27,6 +27,7 @@ class NativeOrbit : public NativeOrbitCxxSpec<NativeOrbit> {
   void motionStop(jsi::Runtime& rt, double tag);
   void motionFrames(jsi::Runtime& rt, double tag, std::vector<double> frames, double to, bool loop);
   void motionSpring(jsi::Runtime& rt, double tag, double to, double stiffness, double damping, double mass);
+  void motionDispose(jsi::Runtime& rt, double tag);
   void motionBind(jsi::Runtime& rt, double view, double prop, double node);
   void motionBindScroll(jsi::Runtime& rt, double scrollView, double value);
 };

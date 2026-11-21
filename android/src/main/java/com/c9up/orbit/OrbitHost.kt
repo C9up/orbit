@@ -3,8 +3,6 @@ package com.c9up.orbit
 import android.app.Activity
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
-import android.util.Log
 import android.view.Choreographer
 import android.view.View
 import android.view.ViewGroup
@@ -53,6 +51,7 @@ object OrbitHost {
   private const val PROP_TRANSLATE_X = 1
   private const val PROP_TRANSLATE_Y = 2
   private const val PROP_SCALE = 3
+  private const val PROP_VISIBLE = 4
 
   /** Every vsync: orbit-host advances its animations; no JS involved. */
   private val frame = object : Choreographer.FrameCallback {
@@ -65,18 +64,34 @@ object OrbitHost {
       val buf = ByteBuffer.wrap(out, 1, out.size - 1).order(ByteOrder.LITTLE_ENDIAN)
       if (buf.remaining() >= 9) OrbitEffects.invalidateBackdrops()
       while (buf.remaining() >= 9) {
-        val view = views[buf.int]
+        val tag = buf.int
         val prop = buf.get().toInt()
         val value = buf.float
-        if (view == null) continue
-        when (prop) {
-          PROP_OPACITY -> view.alpha = value
-          PROP_TRANSLATE_X -> view.translationX = value * density
-          PROP_TRANSLATE_Y -> view.translationY = value * density
-          PROP_SCALE -> { view.scaleX = value; view.scaleY = value }
+        val view = views[tag]
+        if (view == null) {
+          // Bound right after a commit whose views are not mounted yet: the
+          // host sends a value once, so keep it for the view's creation.
+          early.getOrPut(tag) { HashMap() }[prop] = value
+          continue
         }
+        applyMotion(view, prop, value)
       }
       Choreographer.getInstance().postFrameCallback(this)
+    }
+  }
+
+  /** Motion values that reached a view before its creation, by tag then prop. */
+  private val early = HashMap<Int, HashMap<Int, Float>>()
+
+  private fun applyMotion(view: View, prop: Int, value: Float) {
+    when (prop) {
+      PROP_OPACITY -> view.alpha = value
+      PROP_TRANSLATE_X -> view.translationX = value * density
+      PROP_TRANSLATE_Y -> view.translationY = value * density
+      PROP_SCALE -> { view.scaleX = value; view.scaleY = value }
+      // Invisible keeps the layout (and a scroll view's offset) but is not
+      // drawn and takes no touch: a covered screen.
+      PROP_VISIBLE -> view.visibility = if (value > 0.5f) View.VISIBLE else View.INVISIBLE
     }
   }
 
@@ -101,13 +116,9 @@ object OrbitHost {
   /** Called by the C++ module on the JS thread; applied on the UI thread. */
   @JvmStatic
   fun apply(ops: ByteArray) {
-    val queued = SystemClock.elapsedRealtimeNanos()
     main.post {
-      val start = SystemClock.elapsedRealtimeNanos()
       applyNow(ops)
       OrbitEffects.invalidateBackdrops()
-      val end = SystemClock.elapsedRealtimeNanos()
-      Log.i("ORBIT", "APPLY bytes=${ops.size} waitMs=${(start - queued) / 1e6} applyMs=${(end - start) / 1e6}")
     }
   }
 
@@ -160,8 +171,10 @@ object OrbitHost {
           }
           view.tag = tag
           views[tag] = view
+          early.remove(tag)?.forEach { (prop, value) -> applyMotion(view, prop, value) }
         }
         OP_DELETE -> {
+          early.remove(tag)
           views.remove(tag)?.let { (it.parent as? ViewGroup)?.removeView(it) }
           OrbitImages.release(tag)
         }

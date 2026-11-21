@@ -12,6 +12,9 @@ pub const PROP_OPACITY: u8 = 0;
 pub const PROP_TRANSLATE_X: u8 = 1;
 pub const PROP_TRANSLATE_Y: u8 = 2;
 pub const PROP_SCALE: u8 = 3;
+/// Shown above 0.5, hidden (laid out, untouchable, not drawn) at or below:
+/// what hides a covered screen the frame its cover finishes arriving.
+pub const PROP_VISIBLE: u8 = 4;
 
 enum Node {
     Value(f64),
@@ -103,6 +106,21 @@ impl Motion {
                 last_ns: None,
             },
         );
+    }
+
+    /// Forget a value or an interpolation, its animation and what it drives.
+    pub fn dispose(&mut self, tag: i32) {
+        self.nodes.remove(&tag);
+        self.anims.remove(&tag);
+        self.bindings.retain(|(_, _, node)| *node != tag);
+        self.scroll.retain(|_, value| *value != tag);
+    }
+
+    /// A view the host deleted: nothing drives it any more.
+    pub fn forget_view(&mut self, view: i32) {
+        self.bindings.retain(|(v, _, _)| *v != view);
+        self.last.retain(|(v, _), _| *v != view);
+        self.scroll.remove(&view);
     }
 
     pub fn bind(&mut self, view: i32, prop: u8, node: i32) {
@@ -265,6 +283,28 @@ mod tests {
         // 3.5 frames in: index 3 of a 3-frame loop is frame 0 again.
         m.tick(3 * frame + frame / 2, &[(20, 100.0)], &mut out);
         assert_eq!(records(&out), vec![(10, PROP_TRANSLATE_X, 0.0)]);
+    }
+
+    #[test]
+    fn a_disposed_value_and_a_deleted_view_leave_nothing_behind() {
+        let mut m = Motion::default();
+        m.value(1, 0.0);
+        m.frames(1, vec![0.0, 1.0], 100.0, true);
+        m.bind(10, PROP_TRANSLATE_X, 1);
+        m.value(2, 1.0);
+        m.bind(11, PROP_VISIBLE, 2);
+        m.bind_scroll(20, 2);
+        let mut out = Vec::new();
+        m.tick(0, &[], &mut out);
+        m.forget_view(11);
+        m.forget_view(20);
+        m.dispose(1);
+        assert!(m.bindings.is_empty() && m.scroll.is_empty() && m.anims.is_empty());
+        assert!(!m.last.contains_key(&(11, PROP_VISIBLE)));
+        assert!(!m.nodes.contains_key(&1));
+        out.clear();
+        assert!(!m.tick(FRAME_NS as i64, &[(20, 5.0)], &mut out));
+        assert!(out.is_empty());
     }
 
     #[test]
