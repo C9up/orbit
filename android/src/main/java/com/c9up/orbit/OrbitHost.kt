@@ -25,6 +25,7 @@ object OrbitHost {
   private const val OP_ROOT = 7
   private const val OP_INPUT = 8
   private const val OP_IMAGE = 9
+  private const val OP_VECTOR = 11
   private const val OP_EFFECTS = 10
 
   @JvmStatic external fun nativeInit()
@@ -167,6 +168,7 @@ object OrbitHost {
             2 -> OrbitScroll(context)
             3 -> OrbitInput(context)
             4 -> OrbitImage(context)
+            5 -> OrbitVector(context)
             else -> OrbitBox(context)
           }
           view.tag = tag
@@ -208,6 +210,11 @@ object OrbitHost {
           val bytes = ByteArray(buf.int)
           buf.get(bytes)
           (views[tag] as? OrbitImage)?.apply(String(bytes, Charsets.UTF_8))
+        }
+        OP_VECTOR -> {
+          val bytes = ByteArray(buf.int)
+          buf.get(bytes)
+          (views[tag] as? OrbitVector)?.apply(bytes)
         }
         OP_EFFECTS -> {
           val dx = buf.float; val dy = buf.float; val blur = buf.float; val spread = buf.float

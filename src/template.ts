@@ -34,6 +34,7 @@ import {
 	type TemplateResult,
 	TemplateScanner,
 } from "@c9up/aurora/renderer";
+import { colorToArgb } from "./color.js";
 import {
 	afterCommit,
 	type MountOptions,
@@ -81,7 +82,7 @@ const INLINE = new Set([
 	"code",
 	"a",
 ]);
-const UNSUPPORTED = new Set(["select", "svg", "canvas", "iframe"]);
+const UNSUPPORTED = new Set(["select", "canvas", "iframe"]);
 
 // Tailwind's preflight resets headings; only these keep a user-agent look.
 const TAG_TEXT: { [tag: string]: Style } = {
@@ -1048,6 +1049,181 @@ function imgElement(
 	return withMotion(withEvents(node, attrs), attrs);
 }
 
+// ─── SVG ─────────────────────────────────────────────────────────
+
+/** What orbit-host draws (`crates/orbit-host/src/vector.rs`); anything else is refused. */
+const SVG_TAGS = new Set([
+	"svg",
+	"g",
+	"path",
+	"rect",
+	"circle",
+	"ellipse",
+	"line",
+	"polyline",
+	"polygon",
+	"title",
+	"desc",
+	"metadata",
+]);
+
+/** The attributes the host reads; the rest (xmlns, aria-*, class) stay here. */
+const SVG_ATTRS = new Set([
+	"viewBox",
+	"preserveAspectRatio",
+	"width",
+	"height",
+	"fill",
+	"stroke",
+	"stroke-width",
+	"stroke-linecap",
+	"stroke-linejoin",
+	"stroke-miterlimit",
+	"fill-rule",
+	"fill-opacity",
+	"stroke-opacity",
+	"opacity",
+	"shape-rendering",
+	"transform",
+	"d",
+	"x",
+	"y",
+	"rx",
+	"ry",
+	"cx",
+	"cy",
+	"r",
+	"x1",
+	"y1",
+	"x2",
+	"y2",
+	"points",
+]);
+
+type SvgNode = {
+	t: string;
+	a: { [name: string]: string | number };
+	c: SvgNode[];
+};
+
+/** A paint attribute as the host reads it: ARGB, or `none` / `currentColor`. */
+function svgPaint(value: string): string | number {
+	const v = value.trim();
+	if (v === "none" || v === "currentColor") return v;
+	return colorToArgb(v);
+}
+
+/** An svg element and what it holds, read now (inside the drawing's effect). */
+function svgTree(el: TElement, values: readonly unknown[]): SvgNode {
+	if (!SVG_TAGS.has(el.tag)) {
+		throw new OrbitError(
+			"E_ORBIT_UNSUPPORTED_ELEMENT",
+			`[orbit] <${el.tag}> inside <svg> is not drawn: paths, basic shapes and g are`,
+		);
+	}
+	const a: SvgNode["a"] = {};
+	for (const attr of el.attrs) {
+		if (!SVG_ATTRS.has(attr.name)) continue;
+		const raw = attrValue(attr, values);
+		const value = isGetter(raw) ? raw() : raw;
+		if (value === null || value === undefined || value === false) continue;
+		const text = str(value);
+		a[attr.name] =
+			attr.name === "fill" || attr.name === "stroke" ? svgPaint(text) : text;
+	}
+	return { t: el.tag, a, c: svgChildren(el.children, values) };
+}
+
+/** Child elements, through the slots between them (`${body}`, lists, getters). */
+function svgChildren(nodes: TNode[], values: readonly unknown[]): SvgNode[] {
+	const out: SvgNode[] = [];
+	const visit = (v: unknown): void => {
+		if (isGetter(v)) visit(v());
+		else if (Array.isArray(v)) v.forEach(visit);
+		else if (isTemplateResult(v))
+			out.push(...svgChildren(parse(v.strings), slotValues(v)));
+	};
+	for (const n of nodes) {
+		if (n.kind === "el") out.push(svgTree(n, values));
+		else
+			for (const part of n.parts)
+				if (typeof part === "number") visit(values[part]);
+	}
+	return out;
+}
+
+/** A length attribute in px (`24`, `24px`), or undefined for anything else (`100%`). */
+function svgLength(el: TElement, name: string, values: readonly unknown[]) {
+	const attr = el.attrs.find((a) => a.name === name);
+	if (!attr) return undefined;
+	const raw = attrValue(attr, values);
+	const n = Number(str(isGetter(raw) ? untrack(raw) : raw).replace(/px$/, ""));
+	return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/**
+ * `<svg>`: a vector view orbit-host draws from its paths. The class gives its
+ * box and its text colour (what `currentColor` paints with, else the colour
+ * it inherits); `width` / `height` size it when the class does not, and the
+ * viewBox keeps its proportions.
+ */
+function svgElement(
+	el: TElement,
+	values: readonly unknown[],
+	inherited: Style,
+	attrs: Attrs,
+): NativeNode {
+	const node = new NativeNode("OrbitVector", {}, []);
+	const box = bindClass(node, attrs, {}, (s) => s.box);
+	const sized: Style = {};
+	const width = svgLength(el, "width", values);
+	const height = svgLength(el, "height", values);
+	if (width !== undefined && box.width === undefined) sized.width = width;
+	if (height !== undefined && box.height === undefined) sized.height = height;
+	const viewBox = el.attrs.find((a) => a.name === "viewBox");
+	const numbers = viewBox
+		? str(attrValue(viewBox, values))
+				.trim()
+				.split(/[\s,]+/)
+				.map(Number)
+		: [];
+	const [, , vw, vh] = numbers;
+	if (
+		vw !== undefined &&
+		vh !== undefined &&
+		vw > 0 &&
+		vh > 0 &&
+		box.aspectRatio === undefined &&
+		(sized.width === undefined || sized.height === undefined)
+	) {
+		sized.aspectRatio = vw / vh;
+	}
+	const { className } = attrs;
+	const color = (): string => {
+		const classes = typeof className === "string" ? className : className();
+		const own = tw(classes).text.color;
+		const value = own ?? inherited.color ?? "#000000";
+		return typeof value === "string" ? value : "#000000";
+	};
+	const describe = () => ({
+		color: colorToArgb(color()),
+		root: svgTree(el, values),
+	});
+	let first = true;
+	let initial: ReturnType<typeof describe> | null = null;
+	effect(() => {
+		const next = describe();
+		if (first) {
+			first = false;
+			initial = next;
+		} else {
+			node.setProps({ vector: next });
+		}
+	});
+	node.props = { ...flatten({ ...sized, ...box }), vector: initial };
+	return withMotion(withEvents(node, attrs), attrs);
+}
+
 function element(
 	el: TElement,
 	values: readonly unknown[],
@@ -1064,6 +1240,7 @@ function element(
 		return inputElement(el, values, inherited, attrs);
 	}
 	if (el.tag === "img") return imgElement(el, values, attrs);
+	if (el.tag === "svg") return svgElement(el, values, inherited, attrs);
 	const own = TAG_TEXT[el.tag] ?? {};
 	if (TEXT_BLOCK.has(el.tag) || INLINE.has(el.tag)) {
 		const node = new NativeNode(

@@ -19,6 +19,7 @@ use std::time::Instant;
 
 pub mod gesture;
 pub mod motion;
+pub mod vector;
 
 use serde_json::{Map, Value};
 use taffy::prelude::*;
@@ -38,12 +39,14 @@ const OP_ROOT: u8 = 7;
 const OP_INPUT: u8 = 8;
 const OP_IMAGE: u8 = 9;
 const OP_EFFECTS: u8 = 10;
+const OP_VECTOR: u8 = 11;
 
 const KIND_VIEW: u8 = 0;
 const KIND_TEXT: u8 = 1;
 const KIND_SCROLL: u8 = 2;
 const KIND_INPUT: u8 = 3;
 const KIND_IMAGE: u8 = 4;
+const KIND_VECTOR: u8 = 5;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
@@ -56,6 +59,8 @@ enum Kind {
     TextInput,
     /// An image: a layout leaf sized by its style alone, decoded by the platform.
     Image,
+    /// An `<svg>`: a layout leaf sized by its style, drawn from `vector.rs`'s paths.
+    Vector,
 }
 
 impl Kind {
@@ -67,13 +72,14 @@ impl Kind {
             "RCTScrollView" => Kind::Scroll,
             "OrbitTextInput" => Kind::TextInput,
             "OrbitImage" => Kind::Image,
+            "OrbitVector" => Kind::Vector,
             _ => Kind::View,
         }
     }
     fn is_layout(self) -> bool {
         matches!(
             self,
-            Kind::View | Kind::Scroll | Kind::Text | Kind::TextInput | Kind::Image
+            Kind::View | Kind::Scroll | Kind::Text | Kind::TextInput | Kind::Image | Kind::Vector
         )
     }
 }
@@ -116,6 +122,8 @@ struct Node {
     taffy: Option<NodeId>,
     children: Vec<i32>,
     text: String,
+    /// A vector node's drawing, encoded when its `vector` prop is set.
+    vector: Vec<u8>,
 }
 
 /// What a view draws beyond its box: a CSS box shadow, a backdrop blur, and
@@ -598,7 +606,7 @@ impl Host {
                     let style = text_style_of(&node.props).over(inherited);
                     self.collect_runs(&node.children, &style, runs);
                 }
-                Kind::View | Kind::Scroll | Kind::TextInput | Kind::Image => {}
+                Kind::View | Kind::Scroll | Kind::TextInput | Kind::Image | Kind::Vector => {}
             }
         }
     }
@@ -660,6 +668,10 @@ impl Host {
                         .and_then(Value::as_str)
                         .unwrap_or("")
                         .to_owned();
+                    let vector = match (kind, props.get("vector")) {
+                        (Kind::Vector, Some(v)) => vector::encode(v)?,
+                        _ => Vec::new(),
+                    };
                     if kind.is_layout() {
                         let flags = gesture_flags(&props);
                         gesture::with(|g| g.set_node(tag, flags, kind == Kind::Scroll));
@@ -681,6 +693,7 @@ impl Host {
                             taffy,
                             children: Vec::new(),
                             text,
+                            vector,
                         },
                     );
                     touched.push(tag);
@@ -699,6 +712,9 @@ impl Host {
                         }
                         if let Some(t) = patch.get("text").and_then(Value::as_str) {
                             node.text = t.to_owned();
+                        }
+                        if let (Kind::Vector, Some(v)) = (node.kind, patch.get("vector")) {
+                            node.vector = vector::encode(v)?;
                         }
                         node.props.extend(patch);
                         if let Some(id) = node.taffy {
@@ -897,6 +913,7 @@ impl Host {
                     Kind::Scroll => KIND_SCROLL,
                     Kind::TextInput => KIND_INPUT,
                     Kind::Image => KIND_IMAGE,
+                    Kind::Vector => KIND_VECTOR,
                     _ => KIND_VIEW,
                 });
                 Mounted {
@@ -949,7 +966,15 @@ impl Host {
                 attrs.push(u8::from(effects.clip));
                 mounted.effects = Some(effects);
             }
-            if node.kind == Kind::Image {
+            if node.kind == Kind::Vector {
+                if node.vector != mounted.text {
+                    attrs.push(OP_VECTOR);
+                    put_i32(&mut attrs, tag);
+                    put_i32(&mut attrs, node.vector.len() as i32);
+                    attrs.extend_from_slice(&node.vector);
+                    mounted.text = node.vector.clone();
+                }
+            } else if node.kind == Kind::Image {
                 let encoded = encode_image(&node.props);
                 if encoded != mounted.text {
                     attrs.push(OP_IMAGE);
@@ -1304,7 +1329,7 @@ mod tests {
                 OP_FRAME => 16,
                 OP_VIEW_STYLE => 20,
                 OP_EFFECTS => 25,
-                OP_TEXT | OP_INPUT | OP_IMAGE => 4 + i32_at(i),
+                OP_TEXT | OP_INPUT | OP_IMAGE | OP_VECTOR => 4 + i32_at(i),
                 _ => panic!("unknown op {code}"),
             };
         }
@@ -1402,6 +1427,41 @@ mod tests {
         assert!(host.spans[&3].ends_with(b"un\ndeux"));
         commit(&mut host, r#"[["u",3,{"maxHeight":8}]]"#);
         assert_eq!(height(&host), 8.0);
+    }
+
+    #[test]
+    fn a_vector_is_a_leaf_sent_with_its_paths_once_per_change() {
+        let mut host = Host::default();
+        host.set_viewport(300.0, 600.0);
+        let icon = r##"{"color":-16777216,"root":{"t":"svg","a":{"viewBox":"0 0 24 24","fill":"none","stroke":"currentColor"},"c":[{"t":"path","a":{"d":"M5 12h14"}}]}}"##;
+        let (first, _) = commit(
+            &mut host,
+            &format!(
+                r#"[["c",1,"RCTView",{{}}],["c",3,"OrbitVector",{{"width":24,"height":24,"vector":{icon}}}],["k",1,[3]],["r",1]]"#
+            ),
+        );
+        let size = host
+            .tree
+            .layout(host.nodes[&3].taffy.unwrap())
+            .unwrap()
+            .size;
+        assert_eq!((size.width, size.height), (24.0, 24.0));
+        assert_eq!(codes(&first).iter().filter(|c| **c == OP_VECTOR).count(), 1);
+        let create = first
+            .windows(6)
+            .position(|w| w[0] == OP_CREATE && w[1..5] == 3i32.to_le_bytes())
+            .unwrap();
+        assert_eq!(first[create + 5], KIND_VECTOR);
+
+        // A resize alone sends no paths; a new drawing does.
+        let (second, _) = commit(&mut host, r#"[["u",3,{"width":32,"height":32}]]"#);
+        assert!(!codes(&second).contains(&OP_VECTOR));
+        let red = icon.replace("-16777216", "-65536");
+        let (third, _) = commit(&mut host, &format!(r#"[["u",3,{{"vector":{red}}}]]"#));
+        assert_eq!(codes(&third), vec![OP_VECTOR]);
+
+        let broken = r#"[["u",3,{"vector":{"root":{"t":"svg","a":{"viewBox":"0 0 1 1"},"c":[{"t":"path","a":{"d":"M0 0 Q"}}]}}}]]"#;
+        assert!(host.commit(broken.as_bytes(), &mut Vec::new()).is_err());
     }
 
     #[test]

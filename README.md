@@ -54,6 +54,7 @@ mount(Counter({}), { viewport: Dimensions.get("window") });
 | `img` | an image view, decoded off the UI thread at the size it is shown |
 | `each(items, key, render)` | one row per key: a kept row keeps its views and moves, a new key builds one row, a key that left deletes its row |
 | `each(…, { lazy })` | only the rows in the nearest scroll view's viewport, plus a margin, exist (see below) |
+| `svg` | a vector view: paths, basic shapes and `g`, drawn by the host (see below) |
 
 Both read `placeholder`, `maxlength`, `autocomplete`, `inputmode` and
 `disabled`; `input` reads `type` for the keyboard and for a password field,
@@ -81,8 +82,29 @@ source's own size nor 4096 px a side, and kept decoded in a memory cache
 bounded to an eighth of the app's heap; a download or a file over 64 MB is
 refused. Remote images have no disk cache yet.
 
-Not mapped yet (`E_ORBIT_UNSUPPORTED_ELEMENT`): `select`, `svg`, `canvas`. Line height and accessibility are still to come; the Tailwind subset is hand-written until it
+Not mapped yet (`E_ORBIT_UNSUPPORTED_ELEMENT`): `select`, `canvas`. Line height and accessibility are still to come; the Tailwind subset is hand-written until it
 is compiled from nebula's theme.
+
+## Vector drawings
+
+`<svg>` becomes a vector view. orbit-host (`crates/orbit-host/src/vector.rs`)
+reads the drawing — path data with every command (relative, smooth curves,
+arcs), `rect` (rounded), `circle`, `ellipse`, `line`, `polyline`, `polygon`,
+`g`, `transform`, `fill` / `stroke` and their opacities, `stroke-width`,
+caps, joins, `fill-rule` — and hands the platform plain paths to replay,
+scaled to the box (`viewBox`, `preserveAspectRatio` meet or `none`).
+
+- `currentColor` paints with the svg's text colour: its own `text-*`, else
+  the one it inherits — an icon takes the colour of the text it sits in.
+- The class sizes it; `width` / `height` do when the class does not, and the
+  viewBox keeps its proportions.
+- `shape-rendering="crispEdges"` draws without antialiasing: a QR code's
+  modules stay pure black and white at any scale.
+- Anything else inside (`text`, `use`, gradients, masks) is refused, by name.
+
+On the maintainer's phone nebula's icons match Chromium's rendering at the
+same scale (mean difference under 1.2 / 255 per icon), and a QR code of
+53 × 53 modules drawn at 288 dp has no grey pixel and decodes.
 
 ## Screens
 
