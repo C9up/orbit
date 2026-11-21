@@ -1,8 +1,12 @@
 {
   "name": "@c9up/orbit",
   "version": "0.1.0",
-  "description": "Orbit \u2014 aurora components as native views on a phone, laid out and diffed by a Rust host",
+  "description": "Orbit — aurora components as native views on a phone, laid out and diffed by a Rust host",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/C9up/orbit.git"
+  },
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
