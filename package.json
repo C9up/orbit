@@ -40,7 +40,7 @@
     "@c9up/photon": "^0.1.25"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.12",
+    "@biomejs/biome": "^2.6.8",
     "@c9up/aurora": "^0.1.53",
     "@c9up/photon": "^0.1.25",
     "@tailwindcss/cli": "^4.3.3",
