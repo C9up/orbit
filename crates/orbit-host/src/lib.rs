@@ -238,25 +238,41 @@ fn length_percentage_auto(v: &Value) -> LengthPercentageAuto {
     }
 }
 
+/// A min or max size. Unparseable means no bound, as it did when these took a
+/// `Dimension`; a margin or inset parses `length_percentage_auto` instead,
+/// where unparseable means zero.
+fn size_bound(v: &Value) -> LengthPercentageAuto {
+    match v {
+        Value::String(s) if s.ends_with('%') => s
+            .trim_end_matches('%')
+            .parse::<f32>()
+            .map(|p| LengthPercentageAuto::percent(p / 100.0))
+            .unwrap_or(LengthPercentageAuto::auto()),
+        _ => num(v)
+            .map(LengthPercentageAuto::length)
+            .unwrap_or(LengthPercentageAuto::auto()),
+    }
+}
+
 fn align(v: &Value) -> Option<AlignItems> {
     match v.as_str()? {
-        "flex-start" | "start" => Some(AlignItems::FlexStart),
-        "flex-end" | "end" => Some(AlignItems::FlexEnd),
-        "center" => Some(AlignItems::Center),
-        "stretch" => Some(AlignItems::Stretch),
-        "baseline" => Some(AlignItems::Baseline),
+        "flex-start" | "start" => Some(AlignItems::FLEX_START),
+        "flex-end" | "end" => Some(AlignItems::FLEX_END),
+        "center" => Some(AlignItems::CENTER),
+        "stretch" => Some(AlignItems::STRETCH),
+        "baseline" => Some(AlignItems::BASELINE),
         _ => None,
     }
 }
 
 fn justify(v: &Value) -> Option<JustifyContent> {
     match v.as_str()? {
-        "flex-start" | "start" => Some(JustifyContent::FlexStart),
-        "flex-end" | "end" => Some(JustifyContent::FlexEnd),
-        "center" => Some(JustifyContent::Center),
-        "space-between" => Some(JustifyContent::SpaceBetween),
-        "space-around" => Some(JustifyContent::SpaceAround),
-        "space-evenly" => Some(JustifyContent::SpaceEvenly),
+        "flex-start" | "start" => Some(JustifyContent::FLEX_START),
+        "flex-end" | "end" => Some(JustifyContent::FLEX_END),
+        "center" => Some(JustifyContent::CENTER),
+        "space-between" => Some(JustifyContent::SPACE_BETWEEN),
+        "space-around" => Some(JustifyContent::SPACE_AROUND),
+        "space-evenly" => Some(JustifyContent::SPACE_EVENLY),
         _ => None,
     }
 }
@@ -282,10 +298,14 @@ fn sides<T: Copy>(
 }
 
 fn style_of(props: &Map<String, Value>) -> Style {
-    // React Native's defaults, not CSS's: column, no shrink.
+    // React Native's defaults, not CSS's: column, no shrink, and relative
+    // positioning — insets apply to every box and an absolute child is placed
+    // in its parent, not in the nearest positioned ancestor (taffy, like CSS,
+    // defaults to `static` since 0.15).
     let mut s = Style {
         flex_direction: FlexDirection::Column,
         flex_shrink: 0.0,
+        position: Position::Relative,
         ..Style::default()
     };
     if let Some(v) = props.get("flexDirection").and_then(Value::as_str) {
@@ -315,19 +335,30 @@ fn style_of(props: &Map<String, Value>) -> Style {
     if let Some(v) = props.get("flexBasis") {
         s.flex_basis = dimension(v);
     }
-    s.align_items = props.get("alignItems").and_then(align);
+    // `normal` is what an unset value meant: stretch for align-items, start
+    // for justify-content, in a flex container.
+    s.align_items = props
+        .get("alignItems")
+        .and_then(align)
+        .unwrap_or(AlignItems::NORMAL);
     s.align_self = props.get("alignSelf").and_then(align);
-    s.justify_content = props.get("justifyContent").and_then(justify);
+    s.justify_content = props
+        .get("justifyContent")
+        .and_then(justify)
+        .unwrap_or(JustifyContent::NORMAL);
+    for (key, slot) in [("width", &mut s.size.width), ("height", &mut s.size.height)] {
+        if let Some(v) = props.get(key) {
+            *slot = dimension(v);
+        }
+    }
     for (key, slot) in [
-        ("width", &mut s.size.width),
-        ("height", &mut s.size.height),
         ("minWidth", &mut s.min_size.width),
         ("minHeight", &mut s.min_size.height),
         ("maxWidth", &mut s.max_size.width),
         ("maxHeight", &mut s.max_size.height),
     ] {
         if let Some(v) = props.get(key) {
-            *slot = dimension(v);
+            *slot = size_bound(v);
         }
     }
     s.padding = sides(
@@ -824,65 +855,76 @@ impl Host {
                     width: AvailableSpace::Definite(self.viewport.0),
                     height: AvailableSpace::Definite(self.viewport.1),
                 },
-                |known, available, _id, ctx, _style| {
-                    if let (Some(w), Some(h)) = (known.width, known.height) {
-                        return Size {
-                            width: w,
-                            height: h,
-                        };
-                    }
-                    let Some(tag) = ctx.map(|t| *t) else {
-                        return Size::ZERO;
-                    };
-                    let Some(encoded) = spans.get(&tag) else {
-                        return Size::ZERO;
-                    };
-                    let max_width = known.width.unwrap_or(match available.width {
-                        AvailableSpace::Definite(w) => w,
-                        AvailableSpace::MinContent => 0.0,
-                        AvailableSpace::MaxContent => f32::INFINITY,
-                    });
-                    let mut hasher = DefaultHasher::new();
-                    encoded.hash(&mut hasher);
-                    let hash = hasher.finish();
-                    let mut call = |width: f32| {
-                        measures += 1;
-                        match measure {
-                            Some(f) => {
-                                let packed = f(encoded.as_ptr(), encoded.len(), width);
-                                (
-                                    f32::from_bits((packed >> 32) as u32),
-                                    f32::from_bits(packed as u32),
-                                )
+                |input, _id, ctx, style| {
+                    // Since taffy 0.14 the leaf's box model (padding, border,
+                    // min/max, aspect ratio) is the caller's: compute_leaf_layout
+                    // applies it around the content measure, as taffy did itself.
+                    let tag = ctx.map(|t| *t);
+                    taffy::compute_leaf_layout(
+                        input,
+                        style,
+                        |_, _| 0.0,
+                        |known, available| {
+                            if let (Some(w), Some(h)) = (known.width, known.height) {
+                                return Size {
+                                    width: w,
+                                    height: h,
+                                };
                             }
-                            // Desktop tests: 7 dp per byte, 16 dp per line.
-                            None => ((encoded.len() as f32 * 7.0).min(width), 16.0),
-                        }
-                    };
-                    // One platform call per text in the common case: its natural
-                    // size answers every constraint at least that wide. Only a
-                    // narrower constraint (wrapping) costs another call.
-                    let natural = *measure_cache
-                        .entry((hash, f32::INFINITY.to_bits()))
-                        .or_insert_with(|| call(f32::INFINITY));
-                    let (w, h) = if max_width >= natural.0 {
-                        natural
-                    } else {
-                        *measure_cache
-                            .entry((hash, max_width.to_bits()))
-                            .or_insert_with(|| call(max_width))
-                    };
-                    // A field is as wide as its box says, like an HTML input:
-                    // its text does not size it. 160 dp when nothing does.
-                    let w = if inputs.contains(&tag) {
-                        DEFAULT_INPUT_WIDTH
-                    } else {
-                        w
-                    };
-                    Size {
-                        width: known.width.unwrap_or(w),
-                        height: known.height.unwrap_or(h),
-                    }
+                            let Some(tag) = tag else {
+                                return Size::ZERO;
+                            };
+                            let Some(encoded) = spans.get(&tag) else {
+                                return Size::ZERO;
+                            };
+                            let max_width = known.width.unwrap_or(match available.width {
+                                AvailableSpace::Definite(w) => w,
+                                AvailableSpace::MinContent => 0.0,
+                                AvailableSpace::MaxContent => f32::INFINITY,
+                            });
+                            let mut hasher = DefaultHasher::new();
+                            encoded.hash(&mut hasher);
+                            let hash = hasher.finish();
+                            let mut call = |width: f32| {
+                                measures += 1;
+                                match measure {
+                                    Some(f) => {
+                                        let packed = f(encoded.as_ptr(), encoded.len(), width);
+                                        (
+                                            f32::from_bits((packed >> 32) as u32),
+                                            f32::from_bits(packed as u32),
+                                        )
+                                    }
+                                    // Desktop tests: 7 dp per byte, 16 dp per line.
+                                    None => ((encoded.len() as f32 * 7.0).min(width), 16.0),
+                                }
+                            };
+                            // One platform call per text in the common case: its natural
+                            // size answers every constraint at least that wide. Only a
+                            // narrower constraint (wrapping) costs another call.
+                            let natural = *measure_cache
+                                .entry((hash, f32::INFINITY.to_bits()))
+                                .or_insert_with(|| call(f32::INFINITY));
+                            let (w, h) = if max_width >= natural.0 {
+                                natural
+                            } else {
+                                *measure_cache
+                                    .entry((hash, max_width.to_bits()))
+                                    .or_insert_with(|| call(max_width))
+                            };
+                            // A field is as wide as its box says, like an HTML input:
+                            // its text does not size it. 160 dp when nothing does.
+                            let w = if inputs.contains(&tag) {
+                                DEFAULT_INPUT_WIDTH
+                            } else {
+                                w
+                            };
+                            Size {
+                                width: known.width.unwrap_or(w),
+                                height: known.height.unwrap_or(h),
+                            }
+                        },
+                    )
                 },
             )
             .map_err(|e| e.to_string())?;
@@ -1604,5 +1646,135 @@ mod tests {
         let (out, info) = commit(&mut host, r#"[["k",1,[]]]"#);
         assert_eq!(info.deleted, vec![3]);
         assert_eq!(codes(&out), vec![OP_CHILDREN, OP_DELETE]);
+    }
+
+    /// Frames of every tag in `tags`, in the root's coordinates.
+    fn layout_of(ops: &str, tags: &[i32]) -> Vec<Option<[f32; 4]>> {
+        let mut host = Host::default();
+        host.set_viewport(300.0, 600.0);
+        commit(&mut host, ops);
+        host.frames(tags)
+    }
+
+    /// The boxes React Native's rules give, checked against the frames taffy
+    /// 0.9 produced before the move to 0.15 (identical on every scene): an
+    /// absolute child placed in its parent, insets moving an in-flow box,
+    /// alignment, min/max sizes (unparseable means no bound), wrapping, flex
+    /// sizing, aspect ratio, a measured text in a padded box, a scroll view.
+    #[test]
+    fn lays_out_boxes_by_react_natives_rules() {
+        type Frames = Vec<Option<[f32; 4]>>;
+        let scenes: &[(&str, &[i32], Frames)] = &[
+            // absolute child of a nested box: placed in its parent, insets from it
+            (
+                r#"[["c",1,"RCTView",{"padding":10}],["c",3,"RCTView",{"margin":20,"height":100,"padding":5}],
+                ["c",5,"RCTView",{"position":"absolute","top":4,"right":6,"width":30,"height":30}],
+                ["c",7,"RCTView",{"position":"absolute","left":"10%","bottom":0,"height":10,"right":0}],
+                ["k",3,[5,7]],["k",1,[3]],["r",1]]"#,
+                &[3, 5, 7],
+                vec![
+                    Some([30.0, 30.0, 240.0, 100.0]),
+                    Some([234.0, 34.0, 30.0, 30.0]),
+                    Some([54.0, 120.0, 216.0, 10.0]),
+                ],
+            ),
+            // insets on an in-flow box move it (relative positioning)
+            (
+                r#"[["c",1,"RCTView",{}],["c",3,"RCTView",{"height":40,"top":7,"left":9}],["c",5,"RCTView",{"height":40}],
+                ["k",1,[3,5]],["r",1]]"#,
+                &[3, 5],
+                vec![
+                    Some([9.0, 7.0, 300.0, 40.0]),
+                    Some([0.0, 40.0, 300.0, 40.0]),
+                ],
+            ),
+            // alignment: center, flex-end, space-between, alignSelf, stretch by default
+            (
+                r#"[["c",1,"RCTView",{"flexDirection":"row","justifyContent":"space-between","alignItems":"center","height":100}],
+                ["c",3,"RCTView",{"width":50,"height":20}],["c",5,"RCTView",{"width":50,"alignSelf":"stretch"}],
+                ["c",7,"RCTView",{"width":50,"height":30,"alignSelf":"flex-end"}],
+                ["c",9,"RCTView",{"height":60}],["c",11,"RCTView",{"height":10,"marginHorizontal":15}],
+                ["k",9,[11]],["k",1,[3,5,7]],["c",13,"RCTView",{}],["k",13,[1,9]],["r",13]]"#,
+                &[1, 3, 5, 7, 9, 11],
+                vec![
+                    Some([0.0, 0.0, 300.0, 100.0]),
+                    Some([0.0, 40.0, 50.0, 20.0]),
+                    Some([125.0, 0.0, 50.0, 100.0]),
+                    Some([250.0, 70.0, 50.0, 30.0]),
+                    Some([0.0, 100.0, 300.0, 60.0]),
+                    Some([15.0, 100.0, 270.0, 10.0]),
+                ],
+            ),
+            // justify center / flex-end, space-around, space-evenly
+            (
+                r#"[["c",1,"RCTView",{}],["c",3,"RCTView",{"flexDirection":"row","justifyContent":"center","height":20}],
+                ["c",5,"RCTView",{"width":40,"height":10}],["c",7,"RCTView",{"flexDirection":"row","justifyContent":"space-evenly","height":20}],
+                ["c",9,"RCTView",{"width":40,"height":10}],["c",11,"RCTView",{"width":40,"height":10}],
+                ["k",3,[5]],["k",7,[9,11]],["k",1,[3,7]],["r",1]]"#,
+                &[5, 9, 11],
+                vec![
+                    Some([130.0, 0.0, 40.0, 10.0]),
+                    Some([73.0, 20.0, 40.0, 10.0]),
+                    Some([187.0, 20.0, 40.0, 10.0]),
+                ],
+            ),
+            // min / max sizes: lengths, percentages, unparseable values
+            (
+                r#"[["c",1,"RCTView",{"alignItems":"flex-start"}],["c",3,"RCTView",{"minWidth":120,"height":10}],
+                ["c",5,"RCTView",{"width":250,"maxWidth":"50%","height":10}],["c",7,"RCTView",{"maxWidth":"wide","width":200,"height":10}],
+                ["c",9,"RCTView",{"minHeight":"nope","height":10,"width":10}],["c",11,"RCTView",{"flex":1,"maxHeight":50}],
+                ["k",1,[3,5,7,9,11]],["r",1]]"#,
+                &[3, 5, 7, 9, 11],
+                vec![
+                    Some([0.0, 0.0, 120.0, 10.0]),
+                    Some([0.0, 10.0, 150.0, 10.0]),
+                    Some([0.0, 20.0, 200.0, 10.0]),
+                    Some([0.0, 30.0, 10.0, 10.0]),
+                    Some([0.0, 40.0, 0.0, 50.0]),
+                ],
+            ),
+            // wrap, flex grow / shrink / basis, aspect ratio, percentage widths
+            (
+                r#"[["c",1,"RCTView",{"flexDirection":"row","flexWrap":"wrap","padding":4}],
+                ["c",3,"RCTView",{"width":"40%","aspectRatio":2}],["c",5,"RCTView",{"width":"40%","height":15}],
+                ["c",7,"RCTView",{"width":"40%","height":25}],["c",9,"RCTView",{"flexGrow":1,"height":5}],
+                ["c",11,"RCTView",{"flexDirection":"row","height":30}],["c",13,"RCTView",{"flex":1}],["c",15,"RCTView",{"flex":2}],
+                ["c",17,"RCTView",{"flexBasis":60,"flexShrink":1}],["k",11,[13,15,17]],
+                ["c",19,"RCTView",{}],["k",1,[3,5,7,9]],["k",19,[1,11]],["r",19]]"#,
+                &[1, 3, 5, 7, 9, 13, 15, 17],
+                vec![
+                    Some([0.0, 0.0, 300.0, 91.0]),
+                    Some([4.0, 4.0, 117.0, 58.0]),
+                    Some([121.0, 4.0, 117.0, 15.0]),
+                    Some([4.0, 62.0, 117.0, 25.0]),
+                    Some([121.0, 62.0, 175.0, 5.0]),
+                    Some([0.0, 91.0, 80.0, 30.0]),
+                    Some([80.0, 91.0, 160.0, 30.0]),
+                    Some([240.0, 91.0, 60.0, 30.0]),
+                ],
+            ),
+            // measured text in a padded, bordered box, wrapping under a narrow width
+            (
+                r#"[["c",1,"RCTView",{"alignItems":"flex-start"}],["c",3,"RCTText",{"fontSize":12,"padding":6,"borderWidth":2}],
+                ["c",5,"RCTRawText",{"text":"hello world"}],["c",7,"RCTText",{"fontSize":12,"width":40,"paddingHorizontal":3}],
+                ["c",9,"RCTRawText",{"text":"a long sentence that wraps"}],["k",3,[5]],["k",7,[9]],["k",1,[3,7]],["r",1]]"#,
+                &[3, 7],
+                vec![Some([0.0, 0.0, 268.0, 32.0]), Some([0.0, 32.0, 40.0, 16.0])],
+            ),
+            // scroll view: content child grows past the frame
+            (
+                r#"[["c",1,"RCTView",{}],["c",3,"RCTScrollView",{"height":100}],["c",5,"RCTView",{}],
+                ["c",7,"RCTView",{"height":400}],["k",5,[7]],["k",3,[5]],["k",1,[3]],["r",1]]"#,
+                &[3, 5, 7],
+                vec![
+                    Some([0.0, 0.0, 300.0, 100.0]),
+                    Some([0.0, 0.0, 300.0, 400.0]),
+                    Some([0.0, 0.0, 300.0, 400.0]),
+                ],
+            ),
+        ];
+        for (i, (ops, tags, expected)) in scenes.iter().enumerate() {
+            assert_eq!(&layout_of(ops, tags), expected, "scene {i}");
+        }
     }
 }

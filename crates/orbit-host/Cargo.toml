@@ -10,5 +10,5 @@ description = "Orbit's native host: the tree aurora commits, laid out with taffy
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
-taffy = "0.9"
+taffy = "0.15"
 serde_json = "1"
