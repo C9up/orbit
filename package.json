@@ -44,10 +44,10 @@
     "@c9up/aurora": "^0.1.53",
     "@c9up/photon": "^0.1.25",
     "@tailwindcss/cli": "^4.3.3",
-    "@vitest/coverage-v8": "4.1.11",
+    "@vitest/coverage-v8": "4.1.12",
     "tailwindcss": "^4.3.3",
     "typescript": "^6.0.3",
-    "vitest": "4.1.11"
+    "vitest": "4.1.12"
   },
   "files": [
     "src",
