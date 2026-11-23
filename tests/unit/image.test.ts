@@ -1,6 +1,7 @@
 import { html, signal } from "@c9up/aurora/core";
+import { Exception } from "@c9up/flare";
 import { describe, expect, it } from "vitest";
-import { mount, OrbitError, useHost } from "../../src/index.js";
+import { mount, useHost } from "../../src/index.js";
 import { FakeHost } from "./fakeHost.js";
 
 const viewport = { width: 400, height: 800 };
@@ -27,7 +28,7 @@ function errorCode(run: () => unknown): string | undefined {
 	try {
 		run();
 	} catch (error) {
-		if (error instanceof OrbitError) return error.code;
+		if (error instanceof Exception) return error.code;
 		throw error;
 	}
 	return undefined;

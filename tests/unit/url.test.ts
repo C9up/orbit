@@ -68,6 +68,15 @@ describe("StandardURL", () => {
 	it("refuses a relative URL with no base, and a base that is not a URL", () => {
 		expect(() => new StandardURL("/orders")).toThrow(TypeError);
 		expect(() => new StandardURL("/orders", "nowhere")).toThrow(TypeError);
+		expect(() => new StandardURL("/orders")).toThrow(
+			expect.objectContaining({
+				name: "TypeError",
+				code: "E_ORBIT_INVALID_URL",
+			}),
+		);
+		expect(() => new StandardURL("/orders", "nowhere")).toThrow(
+			expect.objectContaining({ code: "E_ORBIT_INVALID_URL" }),
+		);
 		expect(StandardURL.canParse("/x", "https://h.test")).toBe(true);
 	});
 });

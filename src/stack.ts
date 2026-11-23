@@ -9,7 +9,7 @@ import {
 } from "@c9up/aurora/core";
 import { captureContext, type TemplateResult } from "@c9up/aurora/renderer";
 import { afterCommit, treeHost } from "./commit.js";
-import { OrbitError } from "./errors.js";
+import { E_ORBIT_NO_SCREEN, E_ORBIT_STACK_SHOWN } from "./errors.js";
 import { bindMotion, MotionValue } from "./motion.js";
 import { type Child, flatten, NativeNode, Region } from "./node.js";
 
@@ -87,10 +87,7 @@ const ScreenContext = createContext<Screen | undefined>(
 export function useScreen(): Screen {
 	const screen = inject(ScreenContext);
 	if (screen === undefined) {
-		throw new OrbitError(
-			"E_ORBIT_NO_SCREEN",
-			"[orbit] useScreen() outside a screen: it reads the screen a stack shows, from a component that screen built",
-		);
+		throw new E_ORBIT_NO_SCREEN();
 	}
 	return screen;
 }
@@ -239,10 +236,7 @@ export class Stack implements Navigator {
 	 */
 	attach(build: ScreenBuilder, ended: (end: () => void) => void): NativeNode {
 		if (this.#container) {
-			throw new OrbitError(
-				"E_ORBIT_STACK_SHOWN",
-				"[orbit] a stack is shown in one place: this one is already in a template",
-			);
+			throw new E_ORBIT_STACK_SHOWN();
 		}
 		this.#build = build;
 		this.#container = new NativeNode(

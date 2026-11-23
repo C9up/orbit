@@ -13,6 +13,11 @@
  * an opaque one (`mailto:`, `tel:`, `blob:`) is kept as written.
  */
 
+import {
+	E_ORBIT_INVALID_URL,
+	E_ORBIT_OBJECT_URL_UNAVAILABLE,
+} from "./errors.js";
+
 const SCHEME = /^([a-zA-Z][a-zA-Z\d+.-]*):/;
 const DEFAULT_PORTS: { [scheme: string]: string } = {
 	"http:": "80",
@@ -179,7 +184,9 @@ export class StandardURL {
 
 	static createObjectURL(blob: Blob): string {
 		if (platformUrl === undefined)
-			throw new TypeError("URL.createObjectURL is not available");
+			throw new E_ORBIT_OBJECT_URL_UNAVAILABLE(
+				"URL.createObjectURL is not available",
+			);
 		return platformUrl.createObjectURL(blob);
 	}
 
@@ -207,10 +214,10 @@ export class StandardURL {
 					? base.#parts
 					: parseAbsolute(String(base).trim());
 			if (from === null)
-				throw new TypeError(`Invalid base URL: ${String(base)}`);
+				throw new E_ORBIT_INVALID_URL(`Invalid base URL: ${String(base)}`);
 			parts = resolve(input, from);
 		}
-		if (parts === null) throw new TypeError(`Invalid URL: ${input}`);
+		if (parts === null) throw new E_ORBIT_INVALID_URL(`Invalid URL: ${input}`);
 		this.#parts = parts;
 	}
 

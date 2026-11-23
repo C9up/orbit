@@ -1,6 +1,6 @@
 import { each, effect, html, signal } from "@c9up/aurora/core";
 import { describe, expect, it } from "vitest";
-import { mount, OrbitError, useHost } from "../../src/index.js";
+import { errors, mount, useHost } from "../../src/index.js";
 import { FakeHost, type Op } from "./fakeHost.js";
 
 const viewport = { width: 400, height: 800 };
@@ -123,13 +123,11 @@ describe("each", () => {
 				)}</div>`,
 				{ viewport },
 			);
-		expect(run).toThrow(OrbitError);
+		expect(run).toThrow(errors.E_ORBIT_DUPLICATE_KEY);
 		try {
 			run();
 		} catch (error) {
-			expect(error instanceof OrbitError && error.code).toBe(
-				"E_ORBIT_DUPLICATE_KEY",
-			);
+			expect(error).toMatchObject({ code: "E_ORBIT_DUPLICATE_KEY" });
 		}
 	});
 });

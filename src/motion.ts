@@ -6,14 +6,13 @@
  * API.
  */
 import {
-	AuroraError,
 	type MotionDriver,
 	type MotionStyle,
 	type MotionValue,
 	readMotionStyle,
 	setMotionDriver,
 } from "@c9up/aurora/core";
-import { OrbitError } from "./errors.js";
+import { E_ORBIT_INVALID_MOTION } from "./errors.js";
 import { currentHost } from "./host.js";
 
 export {
@@ -76,10 +75,13 @@ export function readMotion(value: unknown): MotionStyle {
 	try {
 		return readMotionStyle(value);
 	} catch (error) {
-		if (error instanceof AuroraError) {
-			throw new OrbitError("E_ORBIT_INVALID_MOTION", error.message, {
-				cause: error,
-			});
+		// Matched by code, not by class: the code is aurora's contract, and it
+		// holds whichever aurora release the app resolves.
+		if (
+			error instanceof Error &&
+			Reflect.get(error, "code") === "E_AURORA_INVALID_MOTION"
+		) {
+			throw new E_ORBIT_INVALID_MOTION([error.message], { cause: error });
 		}
 		throw error;
 	}

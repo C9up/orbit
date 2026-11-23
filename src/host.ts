@@ -1,4 +1,4 @@
-import { OrbitError } from "./errors.js";
+import { E_ORBIT_NO_HOST } from "./errors.js";
 import { useNativeMotion } from "./motion.js";
 
 /**
@@ -83,10 +83,9 @@ export function useHost(next: OrbitHost): void {
 
 export function currentHost(): OrbitHost {
 	if (host === null) {
-		throw new OrbitError(
-			"E_ORBIT_NO_HOST",
-			`[orbit] no native host: call useHost(TurboModuleRegistry.getEnforcing("${NATIVE_MODULE_NAME}")) before mount()`,
-		);
+		throw new E_ORBIT_NO_HOST([
+			`no native host: call useHost(TurboModuleRegistry.getEnforcing("${NATIVE_MODULE_NAME}")) before mount()`,
+		]);
 	}
 	return host;
 }

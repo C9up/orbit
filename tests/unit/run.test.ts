@@ -1,10 +1,6 @@
 import { html } from "@c9up/aurora/core";
 import { describe, expect, it } from "vitest";
-import {
-	colorScheme,
-	NATIVE_MODULE_NAME,
-	OrbitError,
-} from "../../src/index.js";
+import { colorScheme, errors, NATIVE_MODULE_NAME } from "../../src/index.js";
 import { APP_NAME, run } from "../../src/react-native/index.js";
 import { FakeHost } from "./fakeHost.js";
 import { modules, registered, setScheme } from "./reactNative.js";
@@ -27,7 +23,9 @@ describe("run", () => {
 	it("refuses a module that is not orbit's host", () => {
 		modules.set(NATIVE_MODULE_NAME, { commit() {} });
 		run(() => html`<div></div>`);
-		expect(() => registered.get(APP_NAME)?.({})).toThrow(OrbitError);
+		expect(() => registered.get(APP_NAME)?.({})).toThrow(
+			errors.E_ORBIT_NO_HOST,
+		);
 	});
 
 	it("follows the phone's light / dark setting until the app chooses", () => {

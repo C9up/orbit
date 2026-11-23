@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { errors } from "../../src/index.js";
 import { connectServer, ServerEventStream } from "../../src/server.js";
 
 const SERVER = "https://app.example";
@@ -91,8 +92,15 @@ describe("connectServer", () => {
 		);
 		const server = connectServer(SERVER);
 		expect(server.url("/rpc")).toBe(`${SERVER}/rpc`);
-		expect(() => server.url("https://evil.example/x")).toThrow(TypeError);
-		await expect(server.fetch("//evil.example/x")).rejects.toThrow(TypeError);
+		expect(() => server.url("https://evil.example/x")).toThrow(
+			errors.E_ORBIT_FOREIGN_ORIGIN,
+		);
+		await expect(server.fetch("//evil.example/x")).rejects.toThrow(
+			errors.E_ORBIT_FOREIGN_ORIGIN,
+		);
+		await expect(server.fetch("//evil.example/x")).rejects.toMatchObject({
+			code: "E_ORBIT_FOREIGN_ORIGIN",
+		});
 
 		await server.fetch("/");
 		expect(server.xsrf()).toBe("ab.cd");
@@ -137,6 +145,9 @@ describe("connectServer", () => {
 		await expect(server.json("/rpc", {})).resolves.toBeUndefined();
 		status = 500;
 		await expect(server.json("/rpc", {})).rejects.toThrow(/HTTP 500/);
+		await expect(server.json("/rpc", {})).rejects.toMatchObject({
+			code: "E_ORBIT_SERVER_REQUEST_FAILED",
+		});
 	});
 
 	it("refuses plain http to anything but this machine or the emulator's host", () => {
@@ -251,5 +262,12 @@ describe("ServerEventStream", () => {
 		expect(stream.readyState).toBe(ServerEventStream.CLOSED);
 		vi.advanceTimersByTime(10_000);
 		expect(FakeXhr.all).toHaveLength(1);
+	});
+
+	it("refuses to open a stream on a platform with no XMLHttpRequest", () => {
+		vi.stubGlobal("XMLHttpRequest", undefined);
+		expect(() => new ServerEventStream(`${SERVER}/events`)).toThrow(
+			expect.objectContaining({ code: "E_ORBIT_NO_XHR" }),
+		);
 	});
 });

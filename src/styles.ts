@@ -1,5 +1,5 @@
 import { type Signal, signal } from "@c9up/aurora/core";
-import { OrbitError } from "./errors.js";
+import { E_ORBIT_STYLE_TABLE } from "./errors.js";
 import type { Style } from "./node.js";
 
 /**
@@ -149,10 +149,7 @@ export function isStyleTable(v: unknown): v is StyleTable {
 /** Give orbit the app's style table (`ream android:*` does it before the app runs). */
 export function useStyles(table: unknown): void {
 	if (!isStyleTable(table)) {
-		throw new OrbitError(
-			"E_ORBIT_STYLE_TABLE",
-			"[orbit] not a style table orbit reads (version 1, from ream css:compile)",
-		);
+		throw new E_ORBIT_STYLE_TABLE();
 	}
 	selfRules = new Map();
 	relatedRules = new Map();

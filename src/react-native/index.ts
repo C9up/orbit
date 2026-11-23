@@ -25,7 +25,7 @@ import {
 	Dimensions,
 	TurboModuleRegistry,
 } from "react-native";
-import { OrbitError } from "../errors.js";
+import { E_ORBIT_NO_HOST } from "../errors.js";
 import { NATIVE_MODULE_NAME, type OrbitHost, useHost } from "../host.js";
 import { goBack } from "../stack.js";
 import { colorScheme, useStyles } from "../styles.js";
@@ -100,10 +100,9 @@ export function run(
 	AppRegistry.registerRunnable(APP_NAME, ({ initialProps }) => {
 		const host = TurboModuleRegistry.getEnforcing(NATIVE_MODULE_NAME);
 		if (!isOrbitHost(host)) {
-			throw new OrbitError(
-				"E_ORBIT_NO_HOST",
-				`[orbit] the ${NATIVE_MODULE_NAME} module is not orbit's native host: is the app built by ream android:build?`,
-			);
+			throw new E_ORBIT_NO_HOST([
+				`the ${NATIVE_MODULE_NAME} module is not orbit's native host: is the app built by ream android:build?`,
+			]);
 		}
 		useHost(host);
 		useStyles(styles);

@@ -21,7 +21,12 @@
  * mutation, and server-sent events read from React Native's streaming XHR.
  */
 
-import { OrbitError } from "./errors.js";
+import {
+	E_ORBIT_FOREIGN_ORIGIN,
+	E_ORBIT_INSECURE_SERVER,
+	E_ORBIT_NO_XHR,
+	E_ORBIT_SERVER_REQUEST_FAILED,
+} from "./errors.js";
 
 export interface ServerConnection {
 	/** The server's origin (`https://app.example`). */
@@ -100,10 +105,7 @@ export function connectServer(
 	const base = new URL(server);
 	const local = LOCAL_HOSTS.has(base.hostname);
 	if (base.protocol !== "https:" && !(base.protocol === "http:" && local)) {
-		throw new OrbitError(
-			"E_ORBIT_INSECURE_SERVER",
-			`[orbit] the server ${base.origin} is not https (plain http only reaches this machine or the emulator's host)`,
-		);
+		throw new E_ORBIT_INSECURE_SERVER([base.origin]);
 	}
 	const origin = base.origin;
 	let token: string | undefined;
@@ -112,9 +114,7 @@ export function connectServer(
 	const url = (path: string): string => {
 		const target = new URL(path, `${origin}/`).href;
 		if (new URL(target).origin !== origin) {
-			throw new TypeError(
-				`[orbit] the connection to ${origin} does not reach ${target}`,
-			);
+			throw new E_ORBIT_FOREIGN_ORIGIN([origin, target]);
 		}
 		return target;
 	};
@@ -162,7 +162,7 @@ export function connectServer(
 			const text = await response.text();
 			if (text !== "") return JSON.parse(text);
 			if (response.ok) return undefined;
-			throw new Error(`[orbit] ${target} answered HTTP ${response.status}`);
+			throw new E_ORBIT_SERVER_REQUEST_FAILED([target, response.status]);
 		},
 		stream: (target) =>
 			new ServerEventStream(url(target), () => ({
@@ -223,7 +223,7 @@ function createRequest(): StreamingRequest {
 	const request: unknown =
 		typeof Xhr === "function" ? Reflect.construct(Xhr, []) : undefined;
 	if (!isStreamingRequest(request)) {
-		throw new TypeError("[orbit] server events need XMLHttpRequest");
+		throw new E_ORBIT_NO_XHR();
 	}
 	return request;
 }

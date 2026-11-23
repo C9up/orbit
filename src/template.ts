@@ -43,7 +43,14 @@ import {
 	type Root,
 	treeHost,
 } from "./commit.js";
-import { OrbitError } from "./errors.js";
+import {
+	E_ORBIT_BLOCK_IN_TEXT,
+	E_ORBIT_DUPLICATE_KEY,
+	E_ORBIT_IMAGE_SOURCE,
+	E_ORBIT_INSECURE_IMAGE_URL,
+	E_ORBIT_INVALID_SCROLL_BINDING,
+	E_ORBIT_UNSUPPORTED_ELEMENT,
+} from "./errors.js";
 import {
 	bindMotion,
 	bindScrollY,
@@ -410,10 +417,7 @@ function keyedRegion(
 			items.forEach((element, position) => {
 				const key = list.key(element, position);
 				if (next.has(key)) {
-					throw new OrbitError(
-						"E_ORBIT_DUPLICATE_KEY",
-						`[orbit] each(): two elements share the key ${String(key)} — a key names one row`,
-					);
+					throw new E_ORBIT_DUPLICATE_KEY([String(key)]);
 				}
 				const kept = rows.get(key);
 				if (kept) {
@@ -514,10 +518,7 @@ function lazyRegion(
 		);
 		if (new Set(all).size !== all.length) {
 			const duplicate = all.find((key, i) => all.indexOf(key) !== i);
-			throw new OrbitError(
-				"E_ORBIT_DUPLICATE_KEY",
-				`[orbit] each(): two elements share the key ${String(duplicate)} — a key names one row`,
-			);
+			throw new E_ORBIT_DUPLICATE_KEY([String(duplicate)]);
 		}
 		return all;
 	});
@@ -755,11 +756,7 @@ function readAttrs(el: TElement, values: readonly unknown[]): Attrs {
 			const value = typeof slot === "number" ? values[slot] : undefined;
 			if (attr.name === "motion") attrs.motion = readMotion(value);
 			else if (value instanceof MotionValue) attrs.scrollY = value;
-			else
-				throw new OrbitError(
-					"E_ORBIT_INVALID_SCROLL_BINDING",
-					"[orbit] scroll-y expects a motion value",
-				);
+			else throw new E_ORBIT_INVALID_SCROLL_BINDING();
 		} else if (attr.name.startsWith("?")) {
 			// aurora's boolean attribute: present while its value is truthy.
 			attrs.attributes.set(attr.name.slice(1), attrValue(attr, values));
@@ -1174,21 +1171,14 @@ function imageSource(node: NativeNode, value: unknown): string {
 		try {
 			return `file:${decodeURIComponent(path)}`;
 		} catch {
-			throw new OrbitError(
-				"E_ORBIT_IMAGE_SOURCE",
-				`[orbit] <img src="${src}">: not a valid file URL`,
-			);
+			throw new E_ORBIT_IMAGE_SOURCE([src, "not a valid file URL"]);
 		}
 	}
-	if (scheme === "http")
-		throw new OrbitError(
-			"E_ORBIT_INSECURE_IMAGE_URL",
-			`[orbit] <img src="${src}">: an image is fetched over https only`,
-		);
-	throw new OrbitError(
-		"E_ORBIT_IMAGE_SOURCE",
-		`[orbit] <img src="${src}">: ${scheme}: is not an image source (https:, file:, content:, a bundled asset or bytes)`,
-	);
+	if (scheme === "http") throw new E_ORBIT_INSECURE_IMAGE_URL([src]);
+	throw new E_ORBIT_IMAGE_SOURCE([
+		src,
+		`${scheme}: is not an image source (https:, file:, content:, a bundled asset or bytes)`,
+	]);
 }
 
 /**
@@ -1297,10 +1287,10 @@ function svgPaint(value: string): string | number {
 /** An svg element and what it holds, read now (inside the drawing's effect). */
 function svgTree(el: TElement, values: readonly unknown[]): SvgNode {
 	if (!SVG_TAGS.has(el.tag)) {
-		throw new OrbitError(
-			"E_ORBIT_UNSUPPORTED_ELEMENT",
-			`[orbit] <${el.tag}> inside <svg> is not drawn: paths, basic shapes and g are`,
-		);
+		throw new E_ORBIT_UNSUPPORTED_ELEMENT([
+			el.tag,
+			"inside <svg> is not drawn: paths, basic shapes and g are",
+		]);
 	}
 	const a: SvgNode["a"] = {};
 	for (const attr of el.attrs) {
@@ -1409,10 +1399,10 @@ function element(
 	ctx: Ctx,
 ): NativeNode {
 	if (UNSUPPORTED.has(el.tag)) {
-		throw new OrbitError(
-			"E_ORBIT_UNSUPPORTED_ELEMENT",
-			`[orbit] <${el.tag}> has no native mapping yet`,
-		);
+		throw new E_ORBIT_UNSUPPORTED_ELEMENT([
+			el.tag,
+			"has no native mapping yet",
+		]);
 	}
 	const attrs = readAttrs(el, values);
 	const s = styled(el.tag, attrs, ctx);
@@ -1459,10 +1449,7 @@ function virtualText(
 	ctx: Ctx,
 ): NativeNode {
 	if (!isInline(el) && !TEXT_BLOCK.has(el.tag)) {
-		throw new OrbitError(
-			"E_ORBIT_BLOCK_IN_TEXT",
-			`[orbit] <${el.tag}> cannot sit inside text on native`,
-		);
+		throw new E_ORBIT_BLOCK_IN_TEXT([el.tag]);
 	}
 	const attrs = readAttrs(el, values);
 	const s = styled(el.tag, attrs, ctx);

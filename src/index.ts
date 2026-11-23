@@ -20,7 +20,7 @@ export {
 	type OrbitReport,
 	type Root,
 } from "./commit.js";
-export { OrbitError, type OrbitErrorCode } from "./errors.js";
+export * as errors from "./errors.js";
 export { NATIVE_MODULE_NAME, type OrbitHost, useHost } from "./host.js";
 export {
 	bindMotion,

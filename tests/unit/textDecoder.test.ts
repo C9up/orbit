@@ -88,6 +88,19 @@ describe("StandardTextDecoder", () => {
 			new StandardTextDecoder("utf8", { ignoreBOM: true }).decode(bom),
 		).toBe("﻿a");
 		expect(() => new StandardTextDecoder("latin1")).toThrow(RangeError);
+		expect(() => new StandardTextDecoder("latin1")).toThrow(
+			expect.objectContaining({ code: "E_ORBIT_UNSUPPORTED_ENCODING" }),
+		);
+		expect(() =>
+			new StandardTextDecoder("utf-8", { fatal: true }).decode(
+				new Uint8Array([0xff]),
+			),
+		).toThrow(
+			expect.objectContaining({
+				name: "TypeError",
+				code: "E_ORBIT_INVALID_ENCODED_DATA",
+			}),
+		);
 		expect(new StandardTextDecoder().decode()).toBe("");
 		expect(
 			new StandardTextDecoder().decode(new Uint16Array([0x6261]).buffer),

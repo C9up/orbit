@@ -8,11 +8,11 @@ import {
 	provide,
 	signal,
 } from "@c9up/aurora/core";
+import { Exception } from "@c9up/flare";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	createStack,
 	mount,
-	OrbitError,
 	type Screen,
 	useHost,
 	useScreen,
@@ -31,7 +31,7 @@ function expectCode(fn: () => unknown, code: string): void {
 	try {
 		fn();
 	} catch (error) {
-		expect(error).toBeInstanceOf(OrbitError);
+		expect(error).toBeInstanceOf(Exception);
 		expect(Reflect.get(Object(error), "code")).toBe(code);
 		return;
 	}

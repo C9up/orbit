@@ -11,6 +11,12 @@
  * RangeError, as the standard does for a label it does not know.
  */
 
+import {
+	E_ORBIT_INVALID_DECODER_INPUT,
+	E_ORBIT_INVALID_ENCODED_DATA,
+	E_ORBIT_UNSUPPORTED_ENCODING,
+} from "./errors.js";
+
 const LABELS = new Set([
 	"utf-8",
 	"utf8",
@@ -34,7 +40,7 @@ function bytesOf(input: ArrayBuffer | ArrayBufferView | undefined): Uint8Array {
 	if (ArrayBuffer.isView(input)) {
 		return new Uint8Array(input.buffer, input.byteOffset, input.byteLength);
 	}
-	throw new TypeError(
+	throw new E_ORBIT_INVALID_DECODER_INPUT(
 		"The provided value is not of type '(ArrayBuffer or ArrayBufferView)'",
 	);
 }
@@ -53,7 +59,7 @@ export class StandardTextDecoder {
 
 	constructor(label = "utf-8", options: StandardTextDecoderOptions = {}) {
 		if (!LABELS.has(String(label).trim().toLowerCase())) {
-			throw new RangeError(
+			throw new E_ORBIT_UNSUPPORTED_ENCODING(
 				`The encoding label provided ('${label}') is invalid.`,
 			);
 		}
@@ -84,7 +90,7 @@ export class StandardTextDecoder {
 			if (this.fatal) {
 				this.#reset();
 				this.#start = true;
-				throw new TypeError(
+				throw new E_ORBIT_INVALID_ENCODED_DATA(
 					"The encoded data was not valid for encoding utf-8",
 				);
 			}

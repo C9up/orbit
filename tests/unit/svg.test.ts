@@ -1,6 +1,6 @@
 import { html, signal } from "@c9up/aurora/core";
 import { describe, expect, it } from "vitest";
-import { colorToArgb, mount, OrbitError, useHost } from "../../src/index.js";
+import { colorToArgb, errors, mount, useHost } from "../../src/index.js";
 import { FakeHost } from "./fakeHost.js";
 
 const viewport = { width: 400, height: 800 };
@@ -96,7 +96,7 @@ describe("svg", () => {
 			mount(html`<svg viewBox="0 0 10 10"><text x="0" y="5">a</text></svg>`, {
 				viewport,
 			}),
-		).toThrowError(OrbitError);
+		).toThrowError(errors.E_ORBIT_UNSUPPORTED_ELEMENT);
 		expect(() =>
 			mount(
 				html`<svg viewBox="0 0 10 10"><path fill="papayawhip" d="M0 0" /></svg>`,
@@ -104,6 +104,6 @@ describe("svg", () => {
 					viewport,
 				},
 			),
-		).toThrowError(OrbitError);
+		).toThrowError(errors.E_ORBIT_INVALID_COLOR);
 	});
 });

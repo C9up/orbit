@@ -1,11 +1,11 @@
 import { html, signal } from "@c9up/aurora/core";
+import { Exception } from "@c9up/flare";
 import { describe, expect, it } from "vitest";
 import {
 	colorScheme,
 	colorToArgb,
 	MotionValue,
 	mount,
-	OrbitError,
 	unknownClasses,
 	useHost,
 	useStyles,
@@ -24,7 +24,7 @@ function codeOf(fn: () => unknown): string {
 	try {
 		fn();
 	} catch (error) {
-		if (error instanceof OrbitError) return error.code;
+		if (error instanceof Exception) return error.code ?? "no code";
 		throw error;
 	}
 	return "none";

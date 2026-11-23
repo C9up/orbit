@@ -1,4 +1,5 @@
-import { OrbitError } from "./errors.js";
+import type { Exception } from "@c9up/flare";
+import { E_ORBIT_INVALID_COLOR } from "./errors.js";
 
 /**
  * A CSS colour as the 32-bit ARGB integer the native host reads (signed, as
@@ -14,10 +15,7 @@ export function colorToArgb(css: string): number {
 	if (value.startsWith("#")) return fromHex(value.slice(1), css);
 	const fn = /^rgba?\(\s*([^)]+)\)$/.exec(value);
 	if (fn) return fromRgb(fn[1] ?? "", css);
-	throw new OrbitError(
-		"E_ORBIT_INVALID_COLOR",
-		`[orbit] cannot read the colour "${css}"`,
-	);
+	throw new E_ORBIT_INVALID_COLOR([css]);
 }
 
 function pack(r: number, g: number, b: number, a: number): number {
@@ -65,9 +63,6 @@ function fromRgb(args: string, css: string): number {
 	return pack(r ?? 0, g ?? 0, b ?? 0, a);
 }
 
-function invalid(css: string): OrbitError {
-	return new OrbitError(
-		"E_ORBIT_INVALID_COLOR",
-		`[orbit] cannot read the colour "${css}"`,
-	);
+function invalid(css: string): Exception {
+	return new E_ORBIT_INVALID_COLOR([css]);
 }

@@ -27,7 +27,7 @@ import {
 	type PhotonHost,
 	router,
 } from "@c9up/photon/client/core";
-import { OrbitError } from "./errors.js";
+import { E_ORBIT_INTERNAL, E_ORBIT_UNKNOWN_PAGE } from "./errors.js";
 import { connectServer, type ServerConnection } from "./server.js";
 import { createStack, type Stack, type StackOptions } from "./stack.js";
 import { setLinkHandler } from "./template.js";
@@ -99,7 +99,7 @@ export function serverPages(options: ServerPagesOptions): Stack {
 	const current = (): Entry => {
 		const entry = entries.at(-1);
 		if (entry === undefined)
-			throw new Error("[orbit] server pages: empty history");
+			throw new E_ORBIT_INTERNAL(["server pages: empty history"]);
 		return entry;
 	};
 	const absolute = (url: string): string => new URL(url, current().url).href;
@@ -170,10 +170,7 @@ export function serverPages(options: ServerPagesOptions): Stack {
 			? options.pages[name]
 			: undefined;
 		if (page === undefined) {
-			throw new OrbitError(
-				"E_ORBIT_UNKNOWN_PAGE",
-				`[orbit] the server named the page "${name}", which this app does not have`,
-			);
+			throw new E_ORBIT_UNKNOWN_PAGE([name]);
 		}
 		return { default: page };
 	};

@@ -1,4 +1,4 @@
-import { OrbitError } from "./errors.js";
+import { E_ORBIT_COMMIT_FAILED } from "./errors.js";
 import { currentHost, type OrbitHost } from "./host.js";
 import { type NativeNode, setDirtyListener } from "./node.js";
 import { viewportSize } from "./styles.js";
@@ -142,10 +142,7 @@ export class Root {
 		for (const [tag, data] of bytes) this.#host.imageBytes(tag, data);
 		const answer: unknown = JSON.parse(this.#host.commit(JSON.stringify(ops)));
 		if (!isReport(answer)) {
-			throw new OrbitError(
-				"E_ORBIT_COMMIT_FAILED",
-				`[orbit] the host refused a commit: ${JSON.stringify(answer)}`,
-			);
+			throw new E_ORBIT_COMMIT_FAILED([answer]);
 		}
 		for (const tag of answer.deleted) {
 			const node = byTag.get(tag);

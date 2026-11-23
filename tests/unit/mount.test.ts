@@ -1,12 +1,7 @@
 import { component, html, onMount, signal } from "@c9up/aurora/core";
+import { Exception } from "@c9up/flare";
 import { describe, expect, it } from "vitest";
-import {
-	colorToArgb,
-	MotionValue,
-	mount,
-	OrbitError,
-	useHost,
-} from "../../src/index.js";
+import { colorToArgb, MotionValue, mount, useHost } from "../../src/index.js";
 import { FakeHost } from "./fakeHost.js";
 
 const viewport = { width: 400, height: 800 };
@@ -28,7 +23,7 @@ function expectCode(fn: () => unknown, code: string): void {
 	try {
 		fn();
 	} catch (error) {
-		expect(error).toBeInstanceOf(OrbitError);
+		expect(error).toBeInstanceOf(Exception);
 		expect(Reflect.get(Object(error), "code")).toBe(code);
 		return;
 	}
