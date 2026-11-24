@@ -18,6 +18,13 @@
 //!     u8 crisp (no antialiasing)
 //!     i32 verb count, then per verb: u8 verb, its f32 points
 //!       (0 move x y, 1 line x y, 2 cubic x1 y1 x2 y2 x y, 3 quad x1 y1 x y, 4 close)
+//!
+//! A value the host cannot read never fails the commit, as a browser draws
+//! the rest of a page: a non-finite number counts as absent, path data and
+//! `points` are drawn up to their first error (SVG 2, "Path data error
+//! handling"), and an element whose paint or `transform` cannot be read is
+//! left out with what it holds. Each such value is reported once in the
+//! commit's `warnings`, coded `E_ORBIT_SVG_VALUE`.
 
 use serde_json::{Map, Value};
 
@@ -122,36 +129,68 @@ impl PathOut {
     }
 }
 
+/// At most this many values are reported per commit: the report stays small
+/// whatever a drawing holds.
+pub const MAX_WARNINGS: usize = 16;
+
+/// The longest excerpt of an attribute a warning quotes.
+const EXCERPT: usize = 40;
+
+/// Record a value left out (coded, bounded in count and length).
+fn warn(warnings: &mut Vec<String>, message: String) {
+    if warnings.len() < MAX_WARNINGS {
+        warnings.push(format!("E_ORBIT_SVG_VALUE: {message}"));
+    }
+}
+
+/// The start of an attribute, quoted, for a warning.
+fn excerpt(text: &str) -> String {
+    match text.char_indices().nth(EXCERPT) {
+        Some((end, _)) => format!("{:?}…", &text[..end]),
+        None => format!("{text:?}"),
+    }
+}
+
 /// Read an `<svg>` description (`{ color, root }`) into the encoding above.
-pub fn encode(vector: &Value) -> Result<Vec<u8>, String> {
+/// What cannot be read is left out and reported in `warnings`.
+pub fn encode(vector: &Value, warnings: &mut Vec<String>) -> Vec<u8> {
     let current = vector
         .get("color")
         .and_then(Value::as_i64)
         .unwrap_or(0xFF00_0000) as u32;
-    let root = vector.get("root").ok_or("vector: no root")?;
+    let root = vector.get("root").unwrap_or(&Value::Null);
     let attrs = attrs_of(root);
+    let sized = || {
+        let w = attr_num(attrs, "width").unwrap_or(300.0);
+        let h = attr_num(attrs, "height").unwrap_or(150.0);
+        [0.0, 0.0, w, h]
+    };
     let view_box = match attr_str(attrs, "viewBox") {
-        Some(text) => {
-            let n = numbers(text)?;
-            if n.len() != 4 || n[2] <= 0.0 || n[3] <= 0.0 {
-                return Err(format!(
-                    "svg: viewBox {text:?} is not four numbers with a positive size"
-                ));
+        Some(text) => match numbers(text) {
+            Ok(n) if n.len() == 4 && n[2] > 0.0 && n[3] > 0.0 => [n[0], n[1], n[2], n[3]],
+            _ => {
+                warn(
+                    warnings,
+                    format!(
+                        "svg: viewBox {} is not four numbers with a positive size",
+                        excerpt(text)
+                    ),
+                );
+                sized()
             }
-            [n[0], n[1], n[2], n[3]]
-        }
-        None => {
-            let w = attr_num(attrs, "width").unwrap_or(300.0);
-            let h = attr_num(attrs, "height").unwrap_or(150.0);
-            [0.0, 0.0, w, h]
-        }
+        },
+        None => sized(),
     };
     let stretch = attr_str(attrs, "preserveAspectRatio").map(str::trim) == Some("none");
     let mut shapes: Vec<u8> = Vec::new();
     let mut count = 0i32;
-    let inherited = inherit(Inherited::default(), attrs)?;
-    for child in children_of(root) {
-        walk(child, inherited, current, &mut shapes, &mut count)?;
+    match inherit(Inherited::default(), attrs) {
+        Ok(inherited) => {
+            for child in children_of(root) {
+                walk(child, inherited, current, &mut shapes, &mut count, warnings);
+            }
+        }
+        Err(e) => warn(warnings, format!("{e}: the drawing is left out")),
     }
     let mut out = Vec::with_capacity(21 + shapes.len());
     for v in view_box {
@@ -160,7 +199,7 @@ pub fn encode(vector: &Value) -> Result<Vec<u8>, String> {
     out.push(u8::from(stretch));
     out.extend_from_slice(&count.to_le_bytes());
     out.extend_from_slice(&shapes);
-    Ok(out)
+    out
 }
 
 fn attrs_of(node: &Value) -> &Map<String, Value> {
@@ -180,19 +219,21 @@ fn attr_str<'a>(attrs: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
     attrs.get(key).and_then(Value::as_str)
 }
 
+/// A number attribute; a value that is not a finite number (`NaN`,
+/// `Infinity`, `undefined`) counts as absent, as an attribute in error does.
 fn attr_num(attrs: &Map<String, Value>, key: &str) -> Option<f64> {
     match attrs.get(key)? {
-        Value::Number(n) => n.as_f64(),
+        Value::Number(n) => n.as_f64().filter(|v| v.is_finite()),
         Value::String(s) => length(s),
         _ => None,
     }
 }
 
-/// A length attribute: a number, optionally in px.
+/// A length attribute: a finite number, optionally in px.
 fn length(text: &str) -> Option<f64> {
     let text = text.trim();
     let text = text.strip_suffix("px").unwrap_or(text);
-    text.parse().ok()
+    text.parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
 fn paint(value: &Value) -> Result<PaintValue, String> {
@@ -200,7 +241,11 @@ fn paint(value: &Value) -> Result<PaintValue, String> {
         Value::Number(n) => Ok(PaintValue::Color(n.as_i64().unwrap_or(0) as u32)),
         Value::String(s) if s == "none" || s == "transparent" => Ok(PaintValue::None),
         Value::String(s) if s == "currentColor" => Ok(PaintValue::Current),
-        other => Err(format!("svg: paint {other} is not a colour")),
+        Value::String(s) => Err(format!("svg: paint {} is not a colour", excerpt(s))),
+        other => Err(format!(
+            "svg: paint {} is not a colour",
+            excerpt(&other.to_string())
+        )),
     }
 }
 
@@ -259,29 +304,39 @@ fn walk(
     current: u32,
     out: &mut Vec<u8>,
     count: &mut i32,
-) -> Result<(), String> {
+    warnings: &mut Vec<String>,
+) {
     let tag = node.get("t").and_then(Value::as_str).unwrap_or("");
     let attrs = attrs_of(node);
-    let st = inherit(parent, attrs)?;
+    let st = match inherit(parent, attrs) {
+        Ok(st) => st,
+        Err(e) => {
+            warn(warnings, format!("{e}: <{}> is left out", excerpt(tag)));
+            return;
+        }
+    };
     let mut path = PathOut::default();
     let m = st.matrix;
     let num = |key: &str| attr_num(attrs, key).unwrap_or(0.0);
     match tag {
         "g" => {
             for child in children_of(node) {
-                walk(child, st, current, out, count)?;
+                walk(child, st, current, out, count, warnings);
             }
-            return Ok(());
+            return;
         }
         "path" => {
             if let Some(d) = attr_str(attrs, "d") {
-                path_data(d, &m, &mut path)?;
+                // Drawn up to the first error, as SVG 2 says.
+                if let Err(e) = path_data(d, &m, &mut path) {
+                    warn(warnings, format!("{e} in d={}", excerpt(d)));
+                }
             }
         }
         "rect" => {
             let (x, y, w, h) = (num("x"), num("y"), num("width"), num("height"));
             if w <= 0.0 || h <= 0.0 {
-                return Ok(());
+                return;
             }
             let rx = attr_num(attrs, "rx");
             let ry = attr_num(attrs, "ry");
@@ -318,7 +373,13 @@ fn walk(
             path.push(VERB_LINE, &m, &[(num("x2"), num("y2"))]);
         }
         "polyline" | "polygon" => {
-            let pts = numbers(attr_str(attrs, "points").unwrap_or(""))?;
+            let text = attr_str(attrs, "points").unwrap_or("");
+            // Drawn up to the first error, as SVG 2 says (an odd count
+            // leaves the last number out).
+            let (pts, error) = numbers_until_error(text);
+            if let Some(e) = error {
+                warn(warnings, format!("{e} in points={}", excerpt(text)));
+            }
             for (i, [x, y]) in pts.as_chunks::<2>().0.iter().enumerate() {
                 let verb = if i == 0 { VERB_MOVE } else { VERB_LINE };
                 path.push(verb, &m, &[(*x, *y)]);
@@ -327,11 +388,29 @@ fn walk(
                 path.verbs.push(VERB_CLOSE);
             }
         }
-        "title" | "desc" | "metadata" => return Ok(()),
-        other => return Err(format!("svg: <{other}> is not drawn by orbit")),
+        "title" | "desc" | "metadata" => return,
+        other => {
+            warn(
+                warnings,
+                format!("svg: <{}> is not drawn by orbit", excerpt(other)),
+            );
+            return;
+        }
     }
     if path.verbs.is_empty() {
-        return Ok(());
+        return;
+    }
+    // Finite numbers can still add up past what an f32 holds.
+    let width = (st.stroke_width * m.scale()) as f32;
+    if !width.is_finite() || path.points.iter().any(|v| !v.is_finite()) {
+        warn(
+            warnings,
+            format!(
+                "svg: <{}> lies outside the numbers a drawing holds",
+                excerpt(tag)
+            ),
+        );
+        return;
     }
     // A line has no inside: only its stroke shows.
     let fill = if tag == "line" {
@@ -341,12 +420,12 @@ fn walk(
     };
     let stroke = argb(st.stroke, current, st.stroke_opacity * st.opacity);
     if fill == 0 && (stroke == 0 || st.stroke_width == 0.0) {
-        return Ok(());
+        return;
     }
     out.extend_from_slice(&fill.to_le_bytes());
     out.push(st.fill_rule);
     out.extend_from_slice(&stroke.to_le_bytes());
-    out.extend_from_slice(&((st.stroke_width * m.scale()) as f32).to_le_bytes());
+    out.extend_from_slice(&width.to_le_bytes());
     out.push(st.cap);
     out.push(st.join);
     out.extend_from_slice(&(st.miter as f32).to_le_bytes());
@@ -367,7 +446,6 @@ fn walk(
         p += n;
     }
     *count += 1;
-    Ok(())
 }
 
 /// A paint as ARGB with `opacity` folded into its alpha; 0 for none.
@@ -525,7 +603,8 @@ impl<'a> Scanner<'a> {
         }
         std::str::from_utf8(&s[start..self.i])
             .ok()
-            .and_then(|t| t.parse().ok())
+            .and_then(|t| t.parse::<f64>().ok())
+            .filter(|v| v.is_finite())
             .ok_or_else(|| format!("svg: unreadable number at {start}"))
     }
 
@@ -546,12 +625,23 @@ impl<'a> Scanner<'a> {
 }
 
 fn numbers(text: &str) -> Result<Vec<f64>, String> {
+    match numbers_until_error(text) {
+        (out, None) => Ok(out),
+        (_, Some(e)) => Err(e),
+    }
+}
+
+/// The numbers read before the first error, and that error.
+fn numbers_until_error(text: &str) -> (Vec<f64>, Option<String>) {
     let mut sc = Scanner::new(text);
     let mut out = Vec::new();
     while sc.peek().is_some() {
-        out.push(sc.number()?);
+        match sc.number() {
+            Ok(n) => out.push(n),
+            Err(e) => return (out, Some(e)),
+        }
     }
-    Ok(out)
+    (out, None)
 }
 
 /// A `transform` attribute: a list of matrix / translate / scale / rotate / skewX / skewY.
@@ -559,12 +649,10 @@ fn transform(text: &str) -> Result<Matrix, String> {
     let mut m = Matrix::IDENTITY;
     let mut rest = text.trim();
     while !rest.is_empty() {
-        let open = rest
-            .find('(')
-            .ok_or_else(|| format!("svg: transform {text:?}"))?;
-        let close = rest
-            .find(')')
-            .ok_or_else(|| format!("svg: transform {text:?}"))?;
+        let unreadable = || format!("svg: transform {} is not read", excerpt(text));
+        let open = rest.find('(').ok_or_else(unreadable)?;
+        // The `)` that closes this `(`, not one written before it.
+        let close = rest[open..].find(')').ok_or_else(unreadable)? + open;
         let name = rest[..open].trim().trim_start_matches(',').trim();
         let a = numbers(&rest[open + 1..close])?;
         let get = |i: usize| a.get(i).copied();
@@ -614,11 +702,7 @@ fn path_data(d: &str, m: &Matrix, out: &mut PathOut) -> Result<(), String> {
                 Some(b'M') => b'L',
                 Some(b'm') => b'l',
                 Some(prev) if prev != b'Z' && prev != b'z' => prev,
-                _ => {
-                    return Err(format!(
-                        "svg: path data {d:?} does not start with a command"
-                    ))
-                }
+                _ => return Err("svg: path data does not start with a command".to_owned()),
             }
         };
         let rel = command.is_ascii_lowercase();
@@ -855,7 +939,9 @@ mod tests {
     }
 
     fn shapes(v: Value) -> Vec<(i32, i32, f32, usize)> {
-        let buf = encode(&v).unwrap();
+        let mut warnings = Vec::new();
+        let buf = encode(&v, &mut warnings);
+        assert_eq!(warnings, Vec::<String>::new());
         let i32_at = |i: usize| i32::from_le_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]);
         let f32_at = |i: usize| f32::from_le_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]);
         let count = i32_at(17);
@@ -907,11 +993,181 @@ mod tests {
         assert_eq!(s[2].3, 10);
     }
 
+    /// The shapes a drawing holds and what was reported while reading it.
+    fn read(root: Value) -> (i32, Vec<String>) {
+        let mut warnings = Vec::new();
+        let buf = encode(&json!({ "root": root }), &mut warnings);
+        (
+            i32::from_le_bytes([buf[17], buf[18], buf[19], buf[20]]),
+            warnings,
+        )
+    }
+
+    fn one(shape: Value) -> (i32, Vec<String>) {
+        read(json!({ "t": "svg", "a": { "viewBox": "0 0 100 50" }, "c": [
+            shape,
+            { "t": "rect", "a": { "width": "10", "height": "10" } }
+        ]}))
+    }
+
     #[test]
-    fn refuses_what_it_does_not_draw() {
-        let v = json!({ "root": { "t": "svg", "a": { "viewBox": "0 0 1 1" }, "c": [ { "t": "text" } ] } });
-        assert!(encode(&v).unwrap_err().contains("<text>"));
-        let v = json!({ "root": { "t": "svg", "a": { "viewBox": "0 0 0 1" } } });
-        assert!(encode(&v).is_err());
+    fn leaves_out_what_it_does_not_draw_and_says_so() {
+        let (count, warnings) = one(json!({ "t": "text" }));
+        assert_eq!(count, 1);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].starts_with("E_ORBIT_SVG_VALUE: "));
+        assert!(warnings[0].contains("<\"text\">"));
+        // A viewBox in error counts as absent: the width and height size it.
+        let (count, warnings) = read(json!({ "t": "svg", "a": { "viewBox": "0 0 0 1" }, "c": [
+            { "t": "rect", "a": { "width": "1", "height": "1" } }
+        ]}));
+        assert_eq!((count, warnings.len()), (1, 1));
+        // No root at all: an empty drawing.
+        let mut warnings = Vec::new();
+        assert_eq!(encode(&json!({}), &mut warnings).len(), 21);
+    }
+
+    #[test]
+    fn a_number_that_is_not_finite_counts_as_absent() {
+        // `(0 / 0) * 50`: a rect with no height is not drawn, and nothing panics.
+        for height in ["NaN", "Infinity", "-Infinity", "undefined", "1e999"] {
+            let (count, warnings) =
+                one(json!({ "t": "rect", "a": { "width": "40", "height": height, "rx": "2" } }));
+            assert_eq!(count, 1, "{height}");
+            assert!(warnings.is_empty(), "{height}");
+        }
+        let (count, _) = one(
+            json!({ "t": "rect", "a": { "width": 40, "height": 20, "rx": "NaN", "ry": "NaN" } }),
+        );
+        assert_eq!(count, 2);
+        let (count, _) = one(json!({ "t": "circle", "a": { "r": "NaN" } }));
+        assert_eq!(count, 1);
+        // An opacity in error is ignored: the shape is drawn as if it had none.
+        let (count, _) =
+            one(json!({ "t": "rect", "a": { "width": "4", "height": "4", "opacity": "NaN" } }));
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn path_data_and_points_are_drawn_up_to_their_first_error() {
+        let mut out = PathOut::default();
+        assert!(path_data("M0 0 L10 10 L10 NaN L20 20", &Matrix::IDENTITY, &mut out).is_err());
+        assert_eq!(out.verbs, vec![VERB_MOVE, VERB_LINE]);
+        let (count, warnings) =
+            one(json!({ "t": "path", "a": { "d": "M0 0 L10 NaN", "stroke": -1 } }));
+        assert_eq!(count, 2);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("d=\"M0 0 L10 NaN\""));
+        let (count, warnings) = one(
+            json!({ "t": "polyline", "a": { "points": "0,0 10,10 20,undefined", "stroke": -1 } }),
+        );
+        assert_eq!((count, warnings.len()), (2, 1));
+        // Nothing readable: nothing drawn, still reported.
+        let (count, warnings) = one(json!({ "t": "polygon", "a": { "points": "undefined" } }));
+        assert_eq!((count, warnings.len()), (1, 1));
+    }
+
+    #[test]
+    fn an_unreadable_transform_or_paint_leaves_out_its_element() {
+        for t in [
+            ")(",
+            "translate(",
+            "scale)(2",
+            "rotate(NaN)",
+            "matrix(1 2)",
+            ")",
+        ] {
+            assert!(transform(t).is_err(), "{t}");
+            let (count, warnings) = one(json!({ "t": "g", "a": { "transform": t }, "c": [
+                { "t": "rect", "a": { "width": "4", "height": "4" } }
+            ]}));
+            assert_eq!(count, 1, "{t}");
+            assert_eq!(warnings.len(), 1, "{t}");
+        }
+        let (count, warnings) =
+            one(json!({ "t": "rect", "a": { "width": "4", "height": "4", "fill": "chartreuse" } }));
+        assert_eq!((count, warnings.len()), (1, 1));
+        // On the svg itself: the whole drawing is left out.
+        let (count, warnings) = read(json!({ "t": "svg", "a": { "transform": ")(" }, "c": [
+            { "t": "rect", "a": { "width": "4", "height": "4" } }
+        ]}));
+        assert_eq!((count, warnings.len()), (0, 1));
+    }
+
+    #[test]
+    fn numbers_past_what_a_drawing_holds_leave_out_the_shape() {
+        let (count, warnings) =
+            one(json!({ "t": "rect", "a": { "x": "1e308", "width": "1e308", "height": "1e308" } }));
+        assert_eq!((count, warnings.len()), (1, 1));
+        let (count, warnings) = one(json!({ "t": "line", "a": { "x2": "1e300", "stroke": -1 } }));
+        assert_eq!((count, warnings.len()), (1, 1));
+    }
+
+    #[test]
+    fn warnings_are_bounded_in_count_and_length() {
+        let long = format!("M0 0 L{}", "9".repeat(10_000));
+        let shapes: Vec<Value> = (0..100)
+            .map(|_| json!({ "t": "path", "a": { "d": format!("{long} x") } }))
+            .collect();
+        let (_, warnings) = read(json!({ "t": "svg", "a": {}, "c": shapes }));
+        assert_eq!(warnings.len(), MAX_WARNINGS);
+        assert!(warnings.iter().all(|w| w.len() < 200));
+    }
+
+    #[test]
+    fn no_attribute_text_panics() {
+        let texts = [
+            "",
+            ")",
+            "(",
+            ")(",
+            "((",
+            "))",
+            "a(",
+            "(1)",
+            "1e",
+            "-",
+            ".",
+            "+.e",
+            "e1",
+            "1e-",
+            "NaN",
+            "inf",
+            "\u{fffd}",
+            "é(1)",
+            "rotate(1 2)",
+            "M",
+            "M1",
+            "M1 1 A",
+            "A1 1 0 2 1 1 1",
+            "M0 0 a1 1 0 1 1 0 0",
+            "M0 0 a0 0 0 1 1 5 5",
+            "Z1",
+            "m1e308 1e308 l1e308 1e308",
+            "M0 0 A1e-300 1e-300 0 1 1 1e300 1e300",
+        ];
+        for t in texts {
+            let _ = transform(t);
+            let _ = path_data(t, &Matrix::IDENTITY, &mut PathOut::default());
+            let _ = numbers_until_error(t);
+            for key in [
+                "d",
+                "points",
+                "transform",
+                "viewBox",
+                "width",
+                "height",
+                "rx",
+                "r",
+            ] {
+                for tag in [
+                    "path", "polyline", "polygon", "rect", "circle", "ellipse", "line", "g",
+                ] {
+                    let _ = read(json!({ "t": "svg", "a": { key: t }, "c": [
+                        { "t": tag, "a": { key: t, "width": "1", "height": "1" }, "c": [] }
+                    ]}));
+                }
+            }
+        }
     }
 }

@@ -1,7 +1,7 @@
-import { html, signal } from "@c9up/aurora/core";
+import { each, html, signal } from "@c9up/aurora/core";
 import { Exception } from "@c9up/flare";
 import { describe, expect, it } from "vitest";
-import { mount, useHost } from "../../src/index.js";
+import { errors, mount, useHost } from "../../src/index.js";
 import { FakeHost } from "./fakeHost.js";
 
 const viewport = { width: 400, height: 800 };
@@ -96,6 +96,128 @@ describe("images", () => {
 		expect(errorCode(() => srcOf(html`<img src="file:///a%E0.jpg" />`))).toBe(
 			"E_ORBIT_IMAGE_SOURCE",
 		);
+	});
+
+	it("refuses a scheme-relative address, and quotes a long one cut", () => {
+		expect(
+			errorCode(() => srcOf(html`<img src="//cdn.example.org/u/2.png" />`)),
+		).toBe("E_ORBIT_IMAGE_SOURCE");
+		const long = `data:image/png;base64,${"A".repeat(10_000)}`;
+		const host = setup();
+		const seen: Error[] = [];
+		mount(html`<div><img src=${long} /></div>`, {
+			viewport,
+			onError: (error) => seen.push(error),
+		});
+		expect(image(host).node.props.src).toBe("");
+		expect(seen[0]?.message.length).toBeLessThan(200);
+	});
+
+	describe("an address from data orbit will not load", () => {
+		type User = { id: number; name: string; avatar: string };
+		const row = (user: () => User) =>
+			html`<div><img class="size-8" src=${() => user().avatar} alt="" /><p>${() => user().name}</p></div>`;
+
+		for (const [avatar, code] of [
+			["http://cdn.example.org/u/2.png", "E_ORBIT_INSECURE_IMAGE_URL"],
+			["data:image/png;base64,iVBORw0KGgo=", "E_ORBIT_IMAGE_SOURCE"],
+			["blob:https://app.example/9f6c", "E_ORBIT_IMAGE_SOURCE"],
+			["file:///sdcard/a%E0.png", "E_ORBIT_IMAGE_SOURCE"],
+			["//cdn.example.org/u/2.png", "E_ORBIT_IMAGE_SOURCE"],
+		] as const) {
+			it(`first mount: ${avatar.slice(0, 24)} shows nothing for that image, the list is shown`, () => {
+				const host = setup();
+				const seen: Error[] = [];
+				const users: User[] = [
+					{ id: 1, name: "Ana", avatar: "https://cdn.example.org/u/1.png" },
+					{ id: 2, name: "Bo", avatar },
+					{ id: 3, name: "Cy", avatar: "https://cdn.example.org/u/3.png" },
+				];
+				mount(
+					html`<div>${each(
+						() => users,
+						(u) => u.id,
+						row,
+					)}</div>`,
+					{
+						viewport,
+						onError: (error) => seen.push(error),
+					},
+				);
+				expect(host.all("RCTText").map(([tag]) => host.text(tag))).toEqual([
+					"Ana",
+					"Bo",
+					"Cy",
+				]);
+				expect(
+					host.all("OrbitImage").map(([, node]) => node.props.src),
+				).toEqual([
+					"https://cdn.example.org/u/1.png",
+					"",
+					"https://cdn.example.org/u/3.png",
+				]);
+				expect(seen.map((error) => Reflect.get(error, "code"))).toEqual([code]);
+			});
+		}
+
+		it("running app: the list keeps following its data, and a fixed address loads", () => {
+			const host = setup();
+			const seen: Error[] = [];
+			const users = signal<readonly User[]>([
+				{ id: 1, name: "Ana", avatar: "https://cdn.example.org/u/1.png" },
+			]);
+			const root = mount(html`<div>${each(users, (u) => u.id, row)}</div>`, {
+				viewport,
+				onError: (error) => seen.push(error),
+			});
+			const names = () => host.all("RCTText").map(([tag]) => host.text(tag));
+			users((l) => [
+				...l,
+				{ id: 2, name: "Bo", avatar: "http://cdn.example.org/u/2.png" },
+			]);
+			root.flush();
+			users((l) => [
+				...l,
+				{ id: 3, name: "Cy", avatar: "https://cdn.example.org/u/3.png" },
+			]);
+			root.flush();
+			expect(names()).toEqual(["Ana", "Bo", "Cy"]);
+			expect(seen).toHaveLength(1);
+			expect(seen[0]).toBeInstanceOf(errors.E_ORBIT_INSECURE_IMAGE_URL);
+			// The same row, its address fixed: the image loads.
+			users((l) =>
+				l.map((u) =>
+					u.id === 2 ? { ...u, avatar: "https://cdn.example.org/u/2.png" } : u,
+				),
+			);
+			root.flush();
+			expect(host.all("OrbitImage").map(([, node]) => node.props.src)).toEqual([
+				"https://cdn.example.org/u/1.png",
+				"https://cdn.example.org/u/2.png",
+				"https://cdn.example.org/u/3.png",
+			]);
+			// And broken again: reported again, shows nothing.
+			users((l) =>
+				l.map((u) =>
+					u.id === 2 ? { ...u, avatar: "javascript:alert(1)" } : u,
+				),
+			);
+			root.flush();
+			expect(host.all("OrbitImage")[1]?.[1].props.src).toBe("");
+			expect(seen).toHaveLength(2);
+		});
+
+		it("a literal address in the template still throws", () => {
+			setup();
+			expect(
+				errorCode(() =>
+					mount(html`<div><img src="http://cdn.example.org/a.png" /></div>`, {
+						viewport,
+						onError: () => {},
+					}),
+				),
+			).toBe("E_ORBIT_INSECURE_IMAGE_URL");
+		});
 	});
 
 	it("hands bytes to the host before the commit that shows them", () => {

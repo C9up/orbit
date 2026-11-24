@@ -76,7 +76,10 @@ default, as in CSS), `rounded-*` clips it and a border is drawn over it.
   with the node, so a decrypted media stays out of storage. orbit reads the
   array when it commits: keep it unchanged until the image shows.
 
-Any other scheme (`data:`, `javascript:`…) throws `E_ORBIT_IMAGE_SOURCE`.
+Any other scheme (`data:`, `javascript:`…), or none (`//host/a.png`), throws
+`E_ORBIT_IMAGE_SOURCE`. That is for an address written in the template; one
+that comes from data (`src=${user.avatar}`) shows nothing for that image and
+goes to `mount`'s `onError`, so one bad row does not take its list down.
 Images are decoded at the size their box is laid out to, never above the
 source's own size nor 4096 px a side, and kept decoded in a memory cache
 bounded to an eighth of the app's heap; a download or a file over 64 MB is

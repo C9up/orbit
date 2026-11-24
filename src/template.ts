@@ -67,6 +67,7 @@ import {
 	rawText,
 	type Style,
 } from "./node.js";
+import { report, setErrorListener } from "./report.js";
 import { Stack } from "./stack.js";
 import {
 	type Computed,
@@ -1142,6 +1143,11 @@ let bytesVersion = 0;
 
 const SCHEME = /^([a-z][a-z0-9+.-]*):/i;
 
+/** An address as an error quotes it: a `data:` URL can be megabytes long. */
+function quoted(src: string): string {
+	return src.length > 80 ? `${src.slice(0, 80)}…` : src;
+}
+
 /**
  * Where `src` points, in the form the host loads: `https://…`, `file:<path>`,
  * `content://…` (what Android's pickers return), `asset:<name>` for a file
@@ -1160,6 +1166,13 @@ function imageSource(node: NativeNode, value: unknown): string {
 	if (src === "") return "";
 	const scheme = SCHEME.exec(src)?.[1]?.toLowerCase();
 	if (scheme === undefined) {
+		// `//host/a.png` borrows a page's scheme in a browser; an app has no page.
+		if (src.startsWith("//")) {
+			throw new E_ORBIT_IMAGE_SOURCE([
+				quoted(src),
+				"a scheme-relative address names no scheme: write https://",
+			]);
+		}
 		return src.startsWith("/")
 			? `file:${src}`
 			: `asset:${src.replace(/^\.\//, "")}`;
@@ -1171,12 +1184,12 @@ function imageSource(node: NativeNode, value: unknown): string {
 		try {
 			return `file:${decodeURIComponent(path)}`;
 		} catch {
-			throw new E_ORBIT_IMAGE_SOURCE([src, "not a valid file URL"]);
+			throw new E_ORBIT_IMAGE_SOURCE([quoted(src), "not a valid file URL"]);
 		}
 	}
-	if (scheme === "http") throw new E_ORBIT_INSECURE_IMAGE_URL([src]);
+	if (scheme === "http") throw new E_ORBIT_INSECURE_IMAGE_URL([quoted(src)]);
 	throw new E_ORBIT_IMAGE_SOURCE([
-		src,
+		quoted(src),
 		`${scheme}: is not an image source (https:, file:, content:, a bundled asset or bytes)`,
 	]);
 }
@@ -1200,10 +1213,33 @@ function imgElement(
 	const node = new NativeNode("OrbitImage", {}, []);
 	const style = bindStyle(node, () => boxOf(s.computed(), ctx));
 	const src = raw.get("src");
+	// An address written in the template is the developer's: a refusal throws.
+	// One that comes from data (a slot) is the content's: that image shows
+	// nothing and the refusal goes to `mount`'s `onError`, as a browser shows a
+	// broken image and draws the rest of the page.
+	const fromData =
+		el.attrs
+			.find((attr) => attr.name === "src")
+			?.parts.some((part) => typeof part === "number") ?? false;
+	const source = (value: unknown): string => {
+		if (!fromData) return imageSource(node, value);
+		try {
+			return imageSource(node, value);
+		} catch (error) {
+			if (
+				error instanceof E_ORBIT_INSECURE_IMAGE_URL ||
+				error instanceof E_ORBIT_IMAGE_SOURCE
+			) {
+				report(error);
+				return "";
+			}
+			throw error;
+		}
+	};
 	const initial = isGetter(src) ? untrack(src) : src;
 	node.props = {
 		...flatten(style),
-		src: imageSource(node, initial),
+		src: source(initial),
 		alt: str(raw.get("alt")),
 	};
 	if (isGetter(src)) {
@@ -1214,7 +1250,7 @@ function imgElement(
 				first = false;
 				return;
 			}
-			node.setProps({ src: imageSource(node, next) });
+			node.setProps({ src: source(next) });
 		});
 	}
 	return withMotion(withEvents(node, attrs), attrs);
@@ -1611,6 +1647,7 @@ const ROOT_TEXT: Style = { fontSize: 16, color: "#000000", lineHeight: "1.5x" };
  * `flush()` commits synchronously.
  */
 export function mount(result: TemplateResult, options: MountOptions): Root {
+	setErrorListener(options.onError ?? null);
 	viewportSize(options.viewport);
 	const top: Ctx = {
 		text: () => ROOT_TEXT,

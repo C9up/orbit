@@ -10,6 +10,9 @@
 //! a compact binary list of mount operations for the platform layer (Kotlin)
 //! to apply to real views. Nodes no longer reachable from the root are dropped
 //! and their tags reported back so JS can forget them.
+//!
+//! A batch the host refuses may have been applied in part; JS then sends what
+//! it carried again, so `"c"` on a tag the host holds replaces that node.
 
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
@@ -29,6 +32,13 @@ use taffy::prelude::*;
 pub type MeasureFn = extern "C" fn(spans: *const u8, len: usize, max_width: f32) -> u64;
 
 // Mount operation codes, shared with OrbitHost.kt.
+/// How deep views may nest under the root (the root is level 1). taffy lays
+/// a tree out by recursing once per level on the caller's stack — React
+/// Native's JS thread, about 1 MiB — at about 6 KB a level (x86_64, release):
+/// some 170 levels overflow it, and a stack overflow is not a panic
+/// `catch_unwind` could stop. Deeper is refused, coded, before any layout.
+pub const MAX_DEPTH: usize = 100;
+
 const OP_CREATE: u8 = 1;
 const OP_DELETE: u8 = 2;
 const OP_CHILDREN: u8 = 3;
@@ -157,6 +167,8 @@ pub struct CommitInfo {
     pub diff_us: u128,
     pub measures: u32,
     pub nodes: usize,
+    /// Values of drawings left out, coded (`E_ORBIT_SVG_VALUE: …`).
+    pub warnings: Vec<String>,
 }
 
 pub struct Host {
@@ -650,14 +662,17 @@ impl Host {
     }
 
     /// The Text node a text-bearing node belongs to (itself for a Text).
+    /// A path to the root is never longer than the tree is large: a longer
+    /// walk is going round a cycle a bad batch made.
     fn owning_text(&self, mut tag: i32) -> Option<i32> {
-        loop {
+        for _ in 0..=self.nodes.len() {
             let node = self.nodes.get(&tag)?;
             if matches!(node.kind, Kind::Text | Kind::TextInput) {
                 return Some(tag);
             }
             tag = *self.parent.get(&tag)?;
         }
+        None
     }
 
     /// Where nodes were laid out: `[x, y, width, height]` in the root's
@@ -670,7 +685,13 @@ impl Host {
                 let own = self.tree.layout(id).ok()?;
                 let (mut x, mut y) = (own.location.x, own.location.y);
                 let mut at = tag;
+                let mut steps = 0;
                 while let Some(&parent) = self.parent.get(&at) {
+                    // A cycle a bad batch made (see `owning_text`).
+                    steps += 1;
+                    if steps > self.nodes.len() {
+                        return None;
+                    }
                     if let Some(id) = self.nodes.get(&parent).and_then(|n| n.taffy) {
                         let layout = self.tree.layout(id).ok()?;
                         x += layout.location.x;
@@ -681,6 +702,52 @@ impl Host {
                 Some([x, y, own.size.width, own.size.height])
             })
             .collect()
+    }
+
+    /// Refuse a tree taffy would recurse into deeper than `MAX_DEPTH`: the
+    /// paths taffy follows, walked without recursion. A node reached again
+    /// (two parents) is not walked twice; a cycle never ends, so it is
+    /// refused as too deep.
+    fn check_depth(&self, root: NodeId) -> Result<(), String> {
+        let too_deep = || {
+            format!(
+                "E_ORBIT_TREE_TOO_DEEP: the views nest more than {MAX_DEPTH} levels deep, \
+                 more than the host lays out"
+            )
+        };
+        // The levels below and including each node walked whole.
+        let mut height: HashMap<NodeId, usize> = HashMap::new();
+        // The path being walked: each node, its children, the next one to visit,
+        // and the tallest child seen so far.
+        let children = |id: NodeId| self.tree.children(id).unwrap_or_default();
+        let mut path: Vec<(NodeId, Vec<NodeId>, usize, usize)> = vec![(root, children(root), 0, 0)];
+        while let Some(top) = path.last_mut() {
+            let (id, kids, next, tallest) = (top.0, &top.1, top.2, top.3);
+            if let Some(&child) = kids.get(next) {
+                top.2 += 1;
+                let level = path.len() + 1;
+                if let Some(&h) = height.get(&child) {
+                    if level - 1 + h > MAX_DEPTH {
+                        return Err(too_deep());
+                    }
+                    if let Some(top) = path.last_mut() {
+                        top.3 = top.3.max(h);
+                    }
+                    continue;
+                }
+                if level > MAX_DEPTH {
+                    return Err(too_deep());
+                }
+                path.push((child, children(child), 0, 0));
+            } else {
+                path.pop();
+                height.insert(id, tallest + 1);
+                if let Some(parent) = path.last_mut() {
+                    parent.3 = parent.3.max(tallest + 1);
+                }
+            }
+        }
+        Ok(())
     }
 
     pub fn commit(&mut self, ops_json: &[u8], out: &mut Vec<u8>) -> Result<CommitInfo, String> {
@@ -707,9 +774,15 @@ impl Host {
                         .unwrap_or("")
                         .to_owned();
                     let vector = match (kind, props.get("vector")) {
-                        (Kind::Vector, Some(v)) => vector::encode(v)?,
+                        (Kind::Vector, Some(v)) => vector::encode(v, &mut info.warnings),
                         _ => Vec::new(),
                     };
+                    // Sent again after a refused batch the host had applied in part.
+                    if let Some(old) = self.nodes.remove(&tag) {
+                        if let Some(id) = old.taffy {
+                            let _ = self.tree.remove(id);
+                        }
+                    }
                     if kind.is_layout() {
                         let flags = gesture_flags(&props);
                         gesture::with(|g| g.set_node(tag, flags, kind == Kind::Scroll));
@@ -752,7 +825,7 @@ impl Host {
                             node.text = t.to_owned();
                         }
                         if let (Kind::Vector, Some(v)) = (node.kind, patch.get("vector")) {
-                            node.vector = vector::encode(v)?;
+                            node.vector = vector::encode(v, &mut info.warnings);
                         }
                         node.props.extend(patch);
                         if let Some(id) = node.taffy {
@@ -824,6 +897,7 @@ impl Host {
         let Some(root_id) = self.nodes.get(&root).and_then(|n| n.taffy) else {
             return Ok(info);
         };
+        self.check_depth(root_id)?;
         let t1 = Instant::now();
         let mut root_style = self.tree.style(root_id).map_err(|e| e.to_string())?.clone();
         root_style.size = Size {
@@ -1135,23 +1209,48 @@ impl OrbitBuf {
     }
 }
 
+/// Run an exported function's body. A panic must not unwind into the C++
+/// caller (that aborts the app): it becomes `fallback()` instead. This covers
+/// panics only — a stack overflow is not one, which is what `MAX_DEPTH` is for.
+fn guarded<T>(fallback: impl FnOnce() -> T, body: impl FnOnce() -> T) -> T {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)).unwrap_or_else(|_| fallback())
+}
+
+/// `len` items at `ptr`, or none when there are none (a null pointer included).
+///
+/// # Safety
+/// When `len > 0`, `ptr` must point to `len` readable items.
+unsafe fn items<'a, T>(ptr: *const T, len: usize) -> &'a [T] {
+    if ptr.is_null() || len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(ptr, len)
+    }
+}
+
 /// # Safety
 /// `buf` must come from this library and be freed once.
 #[no_mangle]
 pub unsafe extern "C" fn orbit_buf_free(buf: OrbitBuf) {
     if !buf.ptr.is_null() {
-        drop(Vec::from_raw_parts(buf.ptr, buf.len, buf.cap));
+        guarded(
+            || (),
+            || drop(Vec::from_raw_parts(buf.ptr, buf.len, buf.cap)),
+        );
     }
 }
 
 #[no_mangle]
 pub extern "C" fn orbit_set_measure(measure: MeasureFn) {
-    HOST.with(|h| h.borrow_mut().set_measure(measure));
+    guarded(|| (), || HOST.with(|h| h.borrow_mut().set_measure(measure)));
 }
 
 #[no_mangle]
 pub extern "C" fn orbit_set_viewport(width: f32, height: f32) {
-    HOST.with(|h| h.borrow_mut().set_viewport(width, height));
+    guarded(
+        || (),
+        || HOST.with(|h| h.borrow_mut().set_viewport(width, height)),
+    );
 }
 
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
@@ -1171,6 +1270,7 @@ fn info_json(info: &CommitInfo, ops_bytes: usize) -> String {
         "measures": info.measures,
         "nodes": info.nodes,
         "opsBytes": ops_bytes,
+        "warnings": info.warnings,
     })
     .to_string()
 }
@@ -1189,8 +1289,11 @@ pub unsafe extern "C" fn orbit_touch(
     hit: i32,
     out: *mut OrbitBuf,
 ) {
-    let mut commands = Vec::new();
-    gesture::with(|g| g.touch(action, x, y, now_ns, hit, &mut commands));
+    let commands = guarded(Vec::new, || {
+        let mut commands = Vec::new();
+        gesture::with(|g| g.touch(action, x, y, now_ns, hit, &mut commands));
+        commands
+    });
     *out = OrbitBuf::from_vec(commands);
 }
 
@@ -1200,27 +1303,37 @@ pub unsafe extern "C" fn orbit_touch(
 /// `out` must be valid.
 #[no_mangle]
 pub unsafe extern "C" fn orbit_gesture_tick(now_ns: i64, out: *mut OrbitBuf) {
-    let mut commands = Vec::new();
-    gesture::with(|g| g.tick(now_ns, &mut commands));
+    let commands = guarded(Vec::new, || {
+        let mut commands = Vec::new();
+        gesture::with(|g| g.tick(now_ns, &mut commands));
+        commands
+    });
     *out = OrbitBuf::from_vec(commands);
 }
 
 /// The frames of a JSON array of tags, as a JSON array of `[x, y, w, h]` or
-/// null (see `Host::frames`). Returns 0, or 1 with `{"error": …}`.
+/// null (see `Host::frames`). Returns 0, 1 with `{"error": …}`, or 2 when it
+/// panicked.
 ///
 /// # Safety
 /// `tags` must point to `len` readable bytes; `out` must be valid.
 #[no_mangle]
 pub unsafe extern "C" fn orbit_layout(tags: *const u8, len: usize, out: *mut OrbitBuf) -> i32 {
-    let input = std::slice::from_raw_parts(tags, len);
-    let (code, json) = match serde_json::from_slice::<Vec<i32>>(input) {
+    let input = items(tags, len);
+    let result = std::panic::catch_unwind(|| match serde_json::from_slice::<Vec<i32>>(input) {
         Ok(tags) => (
             0,
             serde_json::to_string(&HOST.with(|h| h.borrow().frames(&tags)))
                 .unwrap_or_else(|_| "[]".to_owned()),
         ),
         Err(e) => (1, serde_json::json!({ "error": e.to_string() }).to_string()),
-    };
+    });
+    let (code, json) = result.unwrap_or_else(|p| {
+        (
+            2,
+            serde_json::json!({ "error": panic_message(p) }).to_string(),
+        )
+    });
     *out = OrbitBuf::from_vec(json.into_bytes());
     code
 }
@@ -1237,7 +1350,7 @@ pub unsafe extern "C" fn orbit_commit(
     mount_ops: *mut OrbitBuf,
     info: *mut OrbitBuf,
 ) -> i32 {
-    let input = std::slice::from_raw_parts(ops, len);
+    let input = items(ops, len);
     let result = std::panic::catch_unwind(|| {
         HOST.with(|h| {
             let mut out = Vec::new();
@@ -1264,7 +1377,7 @@ pub unsafe extern "C" fn orbit_commit(
 
 #[no_mangle]
 pub extern "C" fn orbit_motion_value(tag: i32, initial: f64) {
-    motion::with(|m| m.value(tag, initial));
+    guarded(|| (), || motion::with(|m| m.value(tag, initial)));
 }
 
 /// # Safety
@@ -1277,19 +1390,22 @@ pub unsafe extern "C" fn orbit_motion_interpolate(
     to: *const f64,
     len: usize,
 ) {
-    let from = std::slice::from_raw_parts(from, len).to_vec();
-    let to = std::slice::from_raw_parts(to, len).to_vec();
-    motion::with(|m| m.interpolation(tag, input, from, to));
+    let from = items(from, len).to_vec();
+    let to = items(to, len).to_vec();
+    guarded(
+        || (),
+        || motion::with(|m| m.interpolation(tag, input, from, to)),
+    );
 }
 
 #[no_mangle]
 pub extern "C" fn orbit_motion_set(tag: i32, value: f64) {
-    motion::with(|m| m.set(tag, value));
+    guarded(|| (), || motion::with(|m| m.set(tag, value)));
 }
 
 #[no_mangle]
 pub extern "C" fn orbit_motion_stop(tag: i32) {
-    motion::with(|m| m.stop(tag));
+    guarded(|| (), || motion::with(|m| m.stop(tag)));
 }
 
 /// # Safety
@@ -1302,28 +1418,37 @@ pub unsafe extern "C" fn orbit_motion_frames(
     to: f64,
     looping: bool,
 ) {
-    let frames = std::slice::from_raw_parts(frames, len).to_vec();
-    motion::with(|m| m.frames(tag, frames, to, looping));
+    let frames = items(frames, len).to_vec();
+    guarded(
+        || (),
+        || motion::with(|m| m.frames(tag, frames, to, looping)),
+    );
 }
 
 #[no_mangle]
 pub extern "C" fn orbit_motion_spring(tag: i32, to: f64, stiffness: f64, damping: f64, mass: f64) {
-    motion::with(|m| m.spring(tag, to, stiffness, damping, mass));
+    guarded(
+        || (),
+        || motion::with(|m| m.spring(tag, to, stiffness, damping, mass)),
+    );
 }
 
 #[no_mangle]
 pub extern "C" fn orbit_motion_dispose(tag: i32) {
-    motion::with(|m| m.dispose(tag));
+    guarded(|| (), || motion::with(|m| m.dispose(tag)));
 }
 
 #[no_mangle]
 pub extern "C" fn orbit_motion_bind(view: i32, prop: u8, node: i32) {
-    motion::with(|m| m.bind(view, prop, node));
+    guarded(|| (), || motion::with(|m| m.bind(view, prop, node)));
 }
 
 #[no_mangle]
 pub extern "C" fn orbit_motion_bind_scroll(scroll_view: i32, value: i32) {
-    motion::with(|m| m.bind_scroll(scroll_view, value));
+    guarded(
+        || (),
+        || motion::with(|m| m.bind_scroll(scroll_view, value)),
+    );
 }
 
 /// Advance every animation to `now_ns` (UI thread). `scroll_tags`/`scroll_y`
@@ -1340,19 +1465,17 @@ pub unsafe extern "C" fn orbit_motion_tick(
     count: usize,
     out: *mut OrbitBuf,
 ) -> i32 {
-    let tags = if count == 0 {
-        &[][..]
-    } else {
-        std::slice::from_raw_parts(scroll_tags, count)
-    };
-    let ys = if count == 0 {
-        &[][..]
-    } else {
-        std::slice::from_raw_parts(scroll_y, count)
-    };
+    let tags = items(scroll_tags, count);
+    let ys = items(scroll_y, count);
     let scrolls: Vec<(i32, f32)> = tags.iter().copied().zip(ys.iter().copied()).collect();
-    let mut buf = Vec::new();
-    let active = motion::with(|m| m.tick(now_ns, &scrolls, &mut buf));
+    let (active, buf) = guarded(
+        || (false, Vec::new()),
+        || {
+            let mut buf = Vec::new();
+            let active = motion::with(|m| m.tick(now_ns, &scrolls, &mut buf));
+            (active, buf)
+        },
+    );
     *out = OrbitBuf::from_vec(buf);
     i32::from(active)
 }
@@ -1510,7 +1633,9 @@ mod tests {
         assert_eq!(codes(&third), vec![OP_VECTOR]);
 
         let broken = r#"[["u",3,{"vector":{"root":{"t":"svg","a":{"viewBox":"0 0 1 1"},"c":[{"t":"path","a":{"d":"M0 0 Q"}}]}}}]]"#;
-        assert!(host.commit(broken.as_bytes(), &mut Vec::new()).is_err());
+        // Path data in error is drawn up to the error and reported, not refused.
+        let (_, info) = commit(&mut host, broken);
+        assert_eq!(info.warnings.len(), 1);
     }
 
     #[test]
@@ -1776,5 +1901,142 @@ mod tests {
         for (i, (ops, tags, expected)) in scenes.iter().enumerate() {
             assert_eq!(&layout_of(ops, tags), expected, "scene {i}");
         }
+    }
+
+    /// A chain of `depth` nested views, `extra` ops appended before the root.
+    fn chain(depth: usize, extra: &str) -> String {
+        let mut ops = String::from("[");
+        for i in 1..=depth {
+            ops.push_str(&format!(r#"["c",{},"RCTView",{{"padding":1}}],"#, i * 2));
+        }
+        for i in 1..depth {
+            ops.push_str(&format!(r#"["k",{},[{}]],"#, i * 2, i * 2 + 2));
+        }
+        ops.push_str(extra);
+        ops.push_str(r#"["r",2]]"#);
+        ops
+    }
+
+    #[test]
+    fn refuses_views_nested_deeper_than_the_bound_before_layout() {
+        let mut host = Host::default();
+        host.set_viewport(300.0, 600.0);
+        let mut out = Vec::new();
+        assert!(host
+            .commit(chain(MAX_DEPTH, "").as_bytes(), &mut out)
+            .is_ok());
+        let mut host = Host::default();
+        let mut out = Vec::new();
+        let error = host
+            .commit(chain(MAX_DEPTH + 1, "").as_bytes(), &mut out)
+            .unwrap_err();
+        assert!(error.starts_with("E_ORBIT_TREE_TOO_DEEP: "), "{error}");
+        assert!(out.is_empty());
+        // Text runs are not laid out: a deep chain of them does not count.
+        let mut ops = chain(MAX_DEPTH - 1, "");
+        ops.truncate(ops.len() - r#"["r",2]]"#.len());
+        let last = MAX_DEPTH * 2 - 2;
+        ops.push_str(&format!(
+            r#"["c",9001,"RCTText",{{}}],["c",9003,"RCTVirtualText",{{}}],["c",9005,"RCTRawText",{{"text":"x"}}],["k",9003,[9005]],["k",9001,[9003]],["k",{last},[9001]],["r",2]]"#
+        ));
+        let mut host = Host::default();
+        assert!(host.commit(ops.as_bytes(), &mut Vec::new()).is_ok());
+    }
+
+    #[test]
+    fn refuses_a_cycle_and_counts_a_moved_view_where_it_is() {
+        // 2 → 4 → 6 → 2: the walk taffy would do never ends.
+        let mut host = Host::default();
+        let error = host
+            .commit(chain(3, r#"["k",6,[2]],"#).as_bytes(), &mut Vec::new())
+            .unwrap_err();
+        assert!(error.starts_with("E_ORBIT_TREE_TOO_DEEP: "), "{error}");
+        // A view listed under a second parent moves there, as taffy moves it:
+        // the deepest one of a chain of MAX_DEPTH, moved under the root.
+        let mut host = Host::default();
+        let moved = chain(MAX_DEPTH, &format!(r#"["k",2,[4,{}]],"#, MAX_DEPTH * 2));
+        assert!(host.commit(moved.as_bytes(), &mut Vec::new()).is_ok());
+        let deeper = chain(
+            MAX_DEPTH + 1,
+            &format!(r#"["k",2,[4,{}]],"#, MAX_DEPTH * 2 + 2),
+        );
+        assert!(Host::default()
+            .commit(deeper.as_bytes(), &mut Vec::new())
+            .is_ok());
+        let error = Host::default()
+            .commit(chain(MAX_DEPTH + 1, "").as_bytes(), &mut Vec::new())
+            .unwrap_err();
+        assert!(error.starts_with("E_ORBIT_TREE_TOO_DEEP: "), "{error}");
+    }
+
+    #[test]
+    fn creating_a_tag_it_holds_replaces_that_node() {
+        let mut host = Host::default();
+        host.set_viewport(300.0, 600.0);
+        let ops = r#"[["c",1,"RCTView",{}],["c",3,"RCTView",{"height":20}],["k",1,[3]],["r",1]]"#;
+        commit(&mut host, ops);
+        let before = host.tree.total_node_count();
+        // A refused batch sent again: the same creates and children.
+        let (_, info) = commit(
+            &mut host,
+            r#"[["c",3,"RCTView",{"height":30}],["k",1,[3]]]"#,
+        );
+        assert_eq!(host.tree.total_node_count(), before);
+        assert!(info.deleted.is_empty());
+        assert_eq!(host.frames(&[3]), vec![Some([0.0, 0.0, 300.0, 30.0])]);
+    }
+
+    #[test]
+    fn a_drawing_value_it_cannot_read_costs_that_shape_not_the_commit() {
+        let mut host = Host::default();
+        host.set_viewport(300.0, 600.0);
+        let ops = r#"[["c",1,"RCTView",{}],["c",3,"OrbitVector",{"width":100,"height":50,"vector":{"color":-16777216,"root":
+            {"t":"svg","a":{"viewBox":"0 0 100 50"},"c":[
+              {"t":"rect","a":{"width":"40","height":"NaN"},"c":[]},
+              {"t":"g","a":{"transform":")("},"c":[]},
+              {"t":"rect","a":{"width":"40","height":"20"},"c":[]}]}}}],["k",1,[3]],["r",1]]"#;
+        let (out, info) = commit(&mut host, ops);
+        assert!(codes(&out).contains(&OP_VECTOR));
+        assert_eq!(info.warnings.len(), 1);
+        assert!(info.warnings[0].starts_with("E_ORBIT_SVG_VALUE: "));
+        // A patch too.
+        let (_, info) = commit(
+            &mut host,
+            r#"[["u",3,{"vector":{"root":{"t":"svg","c":[{"t":"path","a":{"d":"M0 0 L1 NaN"}}]}}}]]"#,
+        );
+        assert_eq!(info.warnings.len(), 1);
+        let json = info_json(&info, 0);
+        assert!(
+            json.contains(r#""warnings":["E_ORBIT_SVG_VALUE: "#),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn a_panic_never_leaves_an_exported_function() {
+        assert_eq!(guarded(|| 7, || panic!("boom")), 7);
+        assert_eq!(guarded(|| 7, || 3), 3);
+        assert!(unsafe { items::<u8>(std::ptr::null(), 4) }.is_empty());
+        // The C ABI with nothing to read and nothing to tick.
+        let mut out = OrbitBuf {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+            cap: 0,
+        };
+        let code = unsafe { orbit_layout(std::ptr::null(), 0, &mut out) };
+        assert_eq!(code, 1);
+        unsafe { orbit_buf_free(out) };
+        let mut out = OrbitBuf {
+            ptr: std::ptr::null_mut(),
+            len: 0,
+            cap: 0,
+        };
+        let active =
+            unsafe { orbit_motion_tick(0, std::ptr::null(), std::ptr::null(), 0, &mut out) };
+        assert_eq!(active, 0);
+        unsafe { orbit_buf_free(out) };
+        unsafe { orbit_motion_interpolate(1, 2, std::ptr::null(), std::ptr::null(), 0) };
+        unsafe { orbit_motion_frames(1, std::ptr::null(), 0, 1.0, false) };
+        orbit_motion_dispose(1);
     }
 }

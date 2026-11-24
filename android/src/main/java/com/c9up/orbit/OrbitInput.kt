@@ -118,11 +118,27 @@ class OrbitInput(context: Context) : EditText(context), Framed {
       appliedVersion = version
       if (next != text?.toString()) {
         muted = true
-        setText(next)
-        setSelection(next.length)
+        setValue(next)
         muted = false
       }
     }
+  }
+
+  /**
+   * The value the app sets, kept whole as HTML keeps a value set by script:
+   * `maxlength` limits what the user types, so the length filter is left out
+   * while the value goes in. The caret goes to the end of the text the field
+   * holds — never past it, which Android refuses with an exception.
+   */
+  private fun setValue(value: String) {
+    val kept = filters
+    filters = arrayOf()
+    try {
+      setText(value)
+    } finally {
+      filters = kept
+    }
+    setSelection(text?.length ?: 0)
   }
 
   override fun setFrame(x: Float, y: Float, w: Float, h: Float) {

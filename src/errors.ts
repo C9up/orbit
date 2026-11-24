@@ -17,6 +17,26 @@ export const E_ORBIT_COMMIT_FAILED = createError<[unknown]>(
 	"E_ORBIT_COMMIT_FAILED",
 );
 
+/**
+ * The views of a screen nest deeper than the host lays out (100 levels): the
+ * layout recurses once per level on the JS thread's stack, so the host refuses
+ * the commit instead of overflowing it.
+ */
+export const E_ORBIT_TREE_TOO_DEEP = createError<[string]>(
+	"[orbit] %s",
+	"E_ORBIT_TREE_TOO_DEEP",
+);
+
+/**
+ * A value of an `<svg>` the host cannot read (a `NaN` length, unreadable path
+ * data, `points` or `transform`): that part of the drawing is left out and the
+ * rest drawn. Reported to `mount`'s `onError`, never thrown.
+ */
+export const E_ORBIT_SVG_VALUE = createError<[string]>(
+	"[orbit] %s",
+	"E_ORBIT_SVG_VALUE",
+);
+
 /** An element with no native mapping yet (`<select>`, `<canvas>`, or `<text>` / a gradient inside an `<svg>`). */
 export const E_ORBIT_UNSUPPORTED_ELEMENT = createError<[string, string]>(
 	"[orbit] <%s> %s",

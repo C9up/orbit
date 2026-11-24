@@ -166,4 +166,24 @@ describe("text fields", () => {
 			["u", tag, { text: "", textVersion: 1, measureText: "" }],
 		]);
 	});
+
+	it("sends a value longer than maxlength whole, with the limit: the field keeps it, as HTML does", async () => {
+		const host = setup();
+		const name = signal("Ana");
+		const long = "Maximilienne-Alexandrine B"; // 26 units, from another client
+		mount(
+			html`<div>
+				<input maxlength="20" value=${long} />
+				<textarea maxlength="20" .value=${() => name()}></textarea>
+			</div>`,
+			{ viewport },
+		);
+		const [first, second] = host
+			.all("OrbitTextInput")
+			.map(([, node]) => node.props);
+		expect(first).toMatchObject({ maxLength: 20, text: long, textVersion: 0 });
+		name(long);
+		await Promise.resolve();
+		expect(second).toMatchObject({ maxLength: 20, text: long, textVersion: 1 });
+	});
 });
